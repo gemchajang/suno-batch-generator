@@ -1,7 +1,20 @@
 import type { BgToContentMessage, JobProgressMessage } from '../types/messages';
-import { executeJob, abortCurrentJob } from './suno-automation';
+import { executeJob, abortCurrentJob, triggerWavDownload, triggerDownloadOnSongPage } from './suno-automation';
 
 console.log('[Suno Batch Generator] Content script loaded on', window.location.href);
+
+// Check if we're on a song page and should auto-download
+if (window.location.pathname.includes('/song/') && sessionStorage.getItem('sbg_auto_download') === 'true') {
+  console.log('[SBG] Auto-download triggered on song page');
+  sessionStorage.removeItem('sbg_auto_download');
+  
+  // Wait a bit for page to fully load
+  setTimeout(() => {
+    triggerDownloadOnSongPage()
+      .then(() => console.log('[SBG] Auto-download completed'))
+      .catch((e: Error) => console.error('[SBG] Auto-download failed', e));
+  }, 2000);
+}
 
 // Listen for messages from background service worker
 chrome.runtime.onMessage.addListener(
@@ -31,6 +44,14 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ type: 'DUMP_RESULT', payload: dump });
         break;
       }
+
+      case 'TEST_DOWNLOAD':
+        console.log('[SBG] TEST DOWNLOAD requested');
+        triggerWavDownload()
+          .then(() => console.log('[SBG] Test download triggered'))
+          .catch((e: Error) => console.error('[SBG] Test download failed', e));
+        sendResponse({ ack: true });
+        break;
 
       default:
         sendResponse({ ack: true });

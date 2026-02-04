@@ -4,6 +4,7 @@ import { resolveSelector } from './selectors-runtime';
 export interface MonitorResult {
   completed: boolean;
   timedOut: boolean;
+  songUrl?: string; // URL of the newly created song (e.g., /song/abc123)
 }
 
 /** Count clips using multiple button selectors for robustness */
@@ -14,6 +15,31 @@ function countClips(): number {
   const share = document.querySelectorAll('button[aria-label="Share clip"]').length;
   // Use the max — whichever selector is most reliable
   return Math.max(publish, like, dislike, share);
+}
+
+/** Find the URL of the most recently created song */
+function findNewSongUrl(): string | undefined {
+  // Look for links to /song/[id] in the song feed
+  const songLinks = Array.from(document.querySelectorAll('a[href*="/song/"]'));
+  
+  if (songLinks.length === 0) {
+    console.log('[SBG] No song links found');
+    return undefined;
+  }
+  
+  // The first link should be the most recent (newest at top)
+  const firstLink = songLinks[0] as HTMLAnchorElement;
+  const href = firstLink.href;
+  
+  console.log(`[SBG] Found ${songLinks.length} song links, first: ${href}`);
+  
+  // Extract the song ID from URL
+  const match = href.match(/\/song\/([\w-]+)/);
+  if (match) {
+    return `/song/${match[1]}`;
+  }
+  
+  return undefined;
 }
 
 /** Check for active loading/generating indicators */
@@ -84,7 +110,11 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
       if (clipCountNow > clipCountBefore) {
         console.log(`[SBG] Generation complete (clip count): ${clipCountNow} clips (was ${clipCountBefore})`);
         setTimeout(() => {
-          if (!settled) finish({ completed: true, timedOut: false });
+          if (!settled) {
+            const songUrl = findNewSongUrl();
+            console.log(`[SBG] New song URL: ${songUrl || 'not found'}`);
+            finish({ completed: true, timedOut: false, songUrl });
+          }
         }, 2000);
         return;
       }

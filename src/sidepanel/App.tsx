@@ -81,6 +81,32 @@ export default function App() {
           >
             Diagnose Page
           </button>
+          <button
+            onClick={() => {
+              console.log('[App] Test Download button clicked');
+              addLog('info', 'Test Download requested...');
+              chrome.runtime.sendMessage({ type: 'TEST_DOWNLOAD' }, (response) => {
+                console.log('[App] Response received:', response);
+                if (chrome.runtime.lastError) {
+                  const err = `Request failed: ${chrome.runtime.lastError.message}`;
+                  console.error('[App]', err);
+                  addLog('error', err);
+                  return;
+                }
+                if (response?.error) {
+                  const err = `Error: ${response.error}`;
+                  console.error('[App]', err);
+                  addLog('error', err);
+                  return;
+                }
+                addLog('info', 'Command sent to content script. Check Page Console (F12) for details.');
+              });
+            }}
+            disabled={running}
+            className="flex-1 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded text-xs transition-colors"
+          >
+            Test Download
+          </button>
         </div>
         <SettingsPanel
           settings={settings}

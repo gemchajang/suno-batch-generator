@@ -176,6 +176,110 @@ export function forceClick(element: Element): void {
 }
 
 /**
+ * Trigger click via React internal props (bypasses DOM event delegation).
+ * Solves the problem where synthetic PointerEvent / MouseEvent dispatched
+ * on Radix UI triggers don't open dropdown menus because React's delegation
+ * or isTrusted checks prevent them from being processed.
+ *
+ * Tries: __reactProps$ direct → __reactFiber$ tree walk (up to 15 ancestors).
+ */
+export function triggerReactClick(el: Element): boolean {
+  const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+  if (propsKey) {
+    const props = (el as any)[propsKey];
+    const rect = el.getBoundingClientRect();
+    const init: PointerEventInit & MouseEventInit = {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      pointerId: 1,
+      pointerType: 'mouse',
+    };
+
+    let hit = false;
+    if (typeof props?.onPointerDown === 'function') {
+      props.onPointerDown(new PointerEvent('pointerdown', init));
+      hit = true;
+    }
+    if (typeof props?.onPointerUp === 'function') {
+      props.onPointerUp(new PointerEvent('pointerup', init));
+    }
+    if (typeof props?.onClick === 'function') {
+      props.onClick(new MouseEvent('click', init));
+      hit = true;
+    }
+    if (hit) return true;
+  }
+
+  // Walk React fiber tree to find handlers on ancestor components
+  const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
+  if (fiberKey) {
+    let fiber = (el as any)[fiberKey];
+    const rect = el.getBoundingClientRect();
+    for (let i = 0; i < 15 && fiber; i++, fiber = fiber.return) {
+      const mp = fiber.memoizedProps;
+      if (!mp) continue;
+      let hit = false;
+      if (typeof mp.onPointerDown === 'function') {
+        mp.onPointerDown(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, button: 0,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+        }));
+        hit = true;
+      }
+      if (typeof mp.onClick === 'function') {
+        mp.onClick(new MouseEvent('click', { bubbles: true, button: 0 }));
+        hit = true;
+      }
+      if (hit) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Trigger hover via React internal props.
+ * Needed for Radix UI sub-menu triggers that open on pointer move/enter.
+ */
+export function triggerReactHover(el: Element): boolean {
+  const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+  if (!propsKey) return false;
+
+  const props = (el as any)[propsKey];
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+
+  let hit = false;
+  if (typeof props?.onPointerEnter === 'function') {
+    props.onPointerEnter(new PointerEvent('pointerenter', {
+      bubbles: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse',
+    }));
+    hit = true;
+  }
+  if (typeof props?.onPointerMove === 'function') {
+    props.onPointerMove(new PointerEvent('pointermove', {
+      bubbles: true, clientX: cx, clientY: cy, pointerId: 1, pointerType: 'mouse',
+    }));
+    hit = true;
+  }
+  if (typeof props?.onMouseEnter === 'function') {
+    props.onMouseEnter(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
+    hit = true;
+  }
+  if (typeof props?.onMouseMove === 'function') {
+    props.onMouseMove(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
+    hit = true;
+  }
+
+  return hit;
+}
+
+/**
  * Poll for an element matching a selector+text to appear in the DOM.
  */
 export function waitForElementByText(

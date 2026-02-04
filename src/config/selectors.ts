@@ -72,18 +72,18 @@ export const SELECTORS = {
   },
 
   // Song clip action button — the three-dot/more menu per clip.
-  // In the song list, each clip row has a repeating pattern:
-  //   [Like clip] [Dislike clip] [Share clip] [Publish] [more-menu]
-  // The more-menu button has empty text and no aria-label, appears after Publish.
-  // We select it via the "aria-haspopup=dialog" button with text "More" (button[3]).
-  // But per-clip menus are different — we need to find the right one.
+  // From live diagnostics: aria-label="More menu contents", empty text, no haspopup.
+  // NOTE: textMatch removed — the old "More" text match was hitting wrong buttons
+  // (e.g. page layout "More" button with haspopup="dialog").
   songMenuButton: {
-    primary: 'button[aria-haspopup="dialog"]',
+    primary: 'button[aria-label="More menu contents"]',
     fallbacks: [
       'button[aria-label="More"]',
       'button[aria-label="Actions"]',
+      'button[aria-label="Song options"]',
+      'button[aria-label="More options"]',
+      'button[data-testid="more-actions"]',
     ],
-    textMatch: 'More',
     description: 'Song three-dot/more menu button',
   },
 
@@ -91,9 +91,9 @@ export const SELECTORS = {
   downloadMenuItem: {
     primary: '[role="menuitem"]',
     fallbacks: [
-      'button.chakra-menu__menuitem',
-      '[role="option"]',
-      'a.chakra-menu__menuitem',
+      'button:not([aria-label="Close"])', // Generic button in menu
+      'div[role="menuitem"]',
+      'a[role="menuitem"]',
     ],
     textMatch: 'Download',
     description: 'Download menu item',
@@ -103,8 +103,8 @@ export const SELECTORS = {
   downloadWavOption: {
     primary: '[role="menuitem"]',
     fallbacks: [
-      'button.chakra-menu__menuitem',
-      '[role="option"]',
+      'button',
+      'div',
     ],
     textMatch: 'WAV',
     description: 'Download as WAV option',

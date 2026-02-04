@@ -85,6 +85,12 @@ export interface DownloadReadyMessage {
   };
 }
 
+export interface DownloadWavFileMessage {
+  type: 'DOWNLOAD_WAV_FILE';
+  url: string;
+  filename: string;
+}
+
 export interface Settings {
   delayBetweenSongs: number;
   generationTimeout: number;
@@ -97,7 +103,9 @@ export type PanelToBgMessage =
   | AddJobsMessage
   | ClearQueueMessage
   | GetStateMessage
-  | UpdateSettingsMessage;
+  | GetStateMessage
+  | UpdateSettingsMessage
+  | { type: 'TEST_DOWNLOAD' };
 
 export type BgToPanelMessage =
   | QueueStateUpdate
@@ -106,9 +114,19 @@ export type BgToPanelMessage =
 export type BgToContentMessage =
   | ExecuteJobMessage
   | AbortJobMessage
-  | CheckPageMessage;
+  | CheckPageMessage
+  | { type: 'TEST_DOWNLOAD' };
+
+// Content Script → Background (page context execution via chrome.scripting MAIN world)
+export interface ExecInPageMessage {
+  type: 'EXEC_IN_PAGE';
+  action: 'REACT_CLICK' | 'REACT_HOVER' | 'REACT_DIAGNOSTICS' | 'REACT_OPEN_CLIP_MENU';
+  selector?: string;
+}
 
 export type ContentToBgMessage =
   | JobProgressMessage
   | PageStatusMessage
-  | DownloadReadyMessage;
+  | DownloadReadyMessage
+  | DownloadWavFileMessage
+  | ExecInPageMessage;
