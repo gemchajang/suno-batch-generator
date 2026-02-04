@@ -335,3 +335,41 @@ export async function fillInput(element: Element, value: string): Promise<void> 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Extract Clerk session token from the page context via script injection.
+ * Creates a temporary script that calls window.Clerk.session.getToken()
+ * and dispatchs a custom event with the result.
+ */
+/**
+ * Extract Clerk session token from the page context via script injection.
+ * Injects 'token-extractor.js' from web_accessible_resources to bypass CSP.
+ */
+export function getClerkToken(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const eventName = `SBG_CLERK_TOKEN_${Date.now()}`;
+    const script = document.createElement('script');
+
+    // Use the external file instead of inline script
+    script.src = chrome.runtime.getURL('token-extractor.js');
+    script.setAttribute('data-event-name', eventName);
+
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      window.removeEventListener(eventName, handler);
+      script.remove();
+      resolve(detail);
+    };
+
+    window.addEventListener(eventName, handler);
+    (document.head || document.documentElement).appendChild(script);
+
+    // Safety timeout
+    setTimeout(() => {
+      window.removeEventListener(eventName, handler);
+      if (script.parentNode) script.remove();
+      // resolve(null) is handled by consumer if needed, but here we just return null on timeout
+      resolve(null);
+    }, 5000);
+  });
+}
