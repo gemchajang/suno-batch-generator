@@ -37,7 +37,10 @@ export const SELECTORS = {
   styleInput: {
     primary: 'div.eg9z14i1 textarea',
     fallbacks: [
+      'textarea[maxlength="1000"]', // High confidence attribute
       'textarea[placeholder*="Style" i]',
+      'textarea[placeholder*="genre" i]',
+      'textarea[aria-label*="Style" i]',
     ],
     description: 'Style of music textarea',
   },

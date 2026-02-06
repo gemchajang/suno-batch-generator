@@ -8,7 +8,11 @@ import QueueList from './components/QueueList';
 import LogPanel from './components/LogPanel';
 import SettingsPanel from './components/SettingsPanel';
 
+import ApiLabs from './components/ApiLabs';
+
 export default function App() {
+  const [view, setView] = React.useState<'queue' | 'labs'>('queue');
+
   const {
     jobs,
     running,
@@ -49,71 +53,77 @@ export default function App() {
   }, [addLog]);
 
   return (
-    <div className="flex flex-col gap-3 p-3 h-screen">
-      <h1 className="text-base font-bold text-gray-100">Suno Batch Generator</h1>
-
-      <FileUploader onSongsLoaded={addJobs} disabled={running} />
-
-      <ControlBar
-        running={running}
-        hasJobs={jobs.some((j) => j.status === 'pending')}
-        onStart={start}
-        onStop={stop}
-        onClear={clear}
-      />
-
-      <ProgressBar
-        completed={completed}
-        failed={failed}
-        total={total}
-        progress={progress}
-      />
-
-      <QueueList jobs={jobs} currentJobId={currentJobId} />
-
-      <div className="mt-auto space-y-3">
-        <LogPanel logs={logs} onClear={clearLogs} />
-        <div className="flex gap-2">
-          <button
-            onClick={handleDiagnose}
-            disabled={running}
-            className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 rounded text-xs transition-colors"
-          >
-            Diagnose Page
-          </button>
-          <button
-            onClick={() => {
-              console.log('[App] Test Download button clicked');
-              addLog('info', 'Test Download requested...');
-              chrome.runtime.sendMessage({ type: 'TEST_DOWNLOAD' }, (response) => {
-                console.log('[App] Response received:', response);
-                if (chrome.runtime.lastError) {
-                  const err = `Request failed: ${chrome.runtime.lastError.message}`;
-                  console.error('[App]', err);
-                  addLog('error', err);
-                  return;
-                }
-                if (response?.error) {
-                  const err = `Error: ${response.error}`;
-                  console.error('[App]', err);
-                  addLog('error', err);
-                  return;
-                }
-                addLog('info', 'Command sent to content script. Check Page Console (F12) for details.');
-              });
-            }}
-            disabled={running}
-            className="flex-1 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded text-xs transition-colors"
-          >
-            Test Download
-          </button>
-        </div>
-        <SettingsPanel
-          settings={settings}
-          onUpdate={updateSettings}
-          disabled={running}
-        />
+    <div className="flex flex-col h-screen bg-gray-950">
+      <div className="flex bg-gray-900 border-b border-gray-800">
+        <button
+          onClick={() => setView('queue')}
+          className={`flex-1 py-2 text-sm font-medium ${view === 'queue' ? 'text-white border-b-2 border-indigo-500' : 'text-gray-400 hover:text-gray-200'}`}
+        >
+          Queue
+        </button>
+        <button
+          onClick={() => setView('labs')}
+          className={`flex-1 py-2 text-sm font-medium ${view === 'labs' ? 'text-white border-b-2 border-indigo-500' : 'text-gray-400 hover:text-gray-200'}`}
+        >
+          API Labs
+        </button>
       </div>
+
+      {view === 'queue' ? (
+        <div className="flex flex-col gap-3 p-3 h-full overflow-hidden">
+          {/* Existing Queue UI Content */}
+          <h1 className="text-base font-bold text-gray-100 hidden">Suno Batch Generator</h1>
+
+          <FileUploader onSongsLoaded={addJobs} disabled={running} />
+
+          <ControlBar
+            running={running}
+            hasJobs={jobs.some((j) => j.status === 'pending')}
+            onStart={start}
+            onStop={stop}
+            onClear={clear}
+          />
+
+          <ProgressBar
+            completed={completed}
+            failed={failed}
+            total={total}
+            progress={progress}
+          />
+
+          <QueueList jobs={jobs} currentJobId={currentJobId} />
+
+          <div className="mt-auto space-y-3">
+            <LogPanel logs={logs} onClear={clearLogs} />
+            <div className="flex gap-2">
+              <button
+                onClick={handleDiagnose}
+                disabled={running}
+                className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 rounded text-xs transition-colors"
+              >
+                Diagnose
+              </button>
+              <button
+                onClick={() => {
+                  addLog('info', 'Test Download requested...');
+                  chrome.runtime.sendMessage({ type: 'TEST_DOWNLOAD' });
+                }}
+                disabled={running}
+                className="flex-1 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-100 rounded text-xs transition-colors"
+              >
+                Test DL
+              </button>
+            </div>
+            <SettingsPanel
+              settings={settings}
+              onUpdate={updateSettings}
+              disabled={running}
+            />
+          </div>
+        </div>
+      ) : (
+        <ApiLabs />
+      )}
     </div>
   );
 }

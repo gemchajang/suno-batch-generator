@@ -1,20 +1,27 @@
 import type { BgToContentMessage, JobProgressMessage } from '../types/messages';
-import { executeJob, abortCurrentJob, triggerWavDownload, triggerDownloadOnSongPage } from './suno-automation';
+import { executeJob, abortCurrentJob, testDownloadLastGeneratedSong } from './suno-automation';
 
 console.log('[Suno Batch Generator] Content script loaded on', window.location.href);
 
-// Check if we're on a song page and should auto-download
-if (window.location.pathname.includes('/song/') && sessionStorage.getItem('sbg_auto_download') === 'true') {
-  console.log('[SBG] Auto-download triggered on song page');
-  sessionStorage.removeItem('sbg_auto_download');
-  
-  // Wait a bit for page to fully load
-  setTimeout(() => {
-    triggerDownloadOnSongPage()
-      .then(() => console.log('[SBG] Auto-download completed'))
-      .catch((e: Error) => console.error('[SBG] Auto-download failed', e));
-  }, 2000);
-}
+// Request Interceptor Injection via Background (to bypass CSP)
+chrome.runtime.sendMessage({
+  type: 'EXEC_IN_PAGE',
+  action: 'INJECT_INTERCEPTOR'
+}).then(res => {
+  console.log('[SBG] Interceptor injection requested:', res);
+}).catch(err => {
+  console.error('[SBG] Failed to request interceptor injection:', err);
+});
+
+// START HEARTBEAT LOOP
+// Keeps the background service worker alive by sending a message every 20 seconds
+setInterval(() => {
+  try {
+    chrome.runtime.sendMessage({ type: 'HEARTBEAT', payload: 'ping' }).catch(() => { });
+  } catch (e) {
+    // ignore context invalidation errors
+  }
+}, 20000);
 
 // Listen for messages from background service worker
 chrome.runtime.onMessage.addListener(
@@ -47,10 +54,19 @@ chrome.runtime.onMessage.addListener(
 
       case 'TEST_DOWNLOAD':
         console.log('[SBG] TEST DOWNLOAD requested');
-        triggerWavDownload()
+        testDownloadLastGeneratedSong()
           .then(() => console.log('[SBG] Test download triggered'))
           .catch((e: Error) => console.error('[SBG] Test download failed', e));
         sendResponse({ ack: true });
+        break;
+
+      case 'GENERATE_VIA_API':
+        console.log('[SBG] GENERATE_VIA_API requested', message.payload);
+        import('./suno-automation').then(mod => {
+          mod.resetCycle(); // Ensure clean state if needed
+          mod.generateSongsFromApi(message.payload.jobs);
+        });
+        sendResponse({ started: true });
         break;
 
       default:

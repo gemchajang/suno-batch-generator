@@ -89,12 +89,15 @@ export interface DownloadWavFileMessage {
   type: 'DOWNLOAD_WAV_FILE';
   url: string;
   filename: string;
+  folder?: string;
+  duration?: string;
 }
 
 export interface Settings {
   delayBetweenSongs: number;
   generationTimeout: number;
   maxRetries: number;
+  downloadPath: string;
 }
 
 export type PanelToBgMessage =
@@ -105,7 +108,8 @@ export type PanelToBgMessage =
   | GetStateMessage
   | GetStateMessage
   | UpdateSettingsMessage
-  | { type: 'TEST_DOWNLOAD' };
+  | { type: 'TEST_DOWNLOAD' }
+  | GenerateViaApiMessage;
 
 export type BgToPanelMessage =
   | QueueStateUpdate
@@ -120,8 +124,19 @@ export type BgToContentMessage =
 // Content Script → Background (page context execution via chrome.scripting MAIN world)
 export interface ExecInPageMessage {
   type: 'EXEC_IN_PAGE';
-  action: 'REACT_CLICK' | 'REACT_HOVER' | 'REACT_DIAGNOSTICS' | 'REACT_OPEN_CLIP_MENU';
+  action: 'REACT_CLICK' | 'REACT_HOVER' | 'REACT_DIAGNOSTICS' | 'REACT_OPEN_CLIP_MENU' | 'REACT_GET_TOKENS' | 'INJECT_INTERCEPTOR';
   selector?: string;
+}
+
+export interface HeartbeatMessage {
+  type: 'HEARTBEAT';
+}
+
+export interface GenerateViaApiMessage {
+  type: 'GENERATE_VIA_API';
+  payload: {
+    jobs: any[];
+  };
 }
 
 export type ContentToBgMessage =
@@ -129,4 +144,5 @@ export type ContentToBgMessage =
   | PageStatusMessage
   | DownloadReadyMessage
   | DownloadWavFileMessage
-  | ExecInPageMessage;
+  | ExecInPageMessage
+  | HeartbeatMessage;

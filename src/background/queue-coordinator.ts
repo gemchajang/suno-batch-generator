@@ -18,6 +18,7 @@ let settings: Settings = {
   delayBetweenSongs: DEFAULT_DELAY_BETWEEN_SONGS,
   generationTimeout: DEFAULT_GENERATION_TIMEOUT,
   maxRetries: DEFAULT_MAX_RETRIES,
+  downloadPath: 'SunoMusic', // Default subdirectory
 };
 
 let loopActive = false;
@@ -304,7 +305,7 @@ export function emitLog(level: 'info' | 'warn' | 'error', message: string): void
     type: 'LOG',
     payload: { level, message, timestamp: Date.now() },
   };
-  chrome.runtime.sendMessage(log).catch(() => {});
+  chrome.runtime.sendMessage(log).catch(() => { });
 }
 
 function sendToContentScript(message: unknown, callback?: (response: any) => void): void {

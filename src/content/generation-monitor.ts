@@ -4,7 +4,7 @@ import { resolveSelector } from './selectors-runtime';
 export interface MonitorResult {
   completed: boolean;
   timedOut: boolean;
-  songUrl?: string; // URL of the newly created song (e.g., /song/abc123)
+  songUrls: string[]; // URLs of the newly created songs
 }
 
 /** Count clips using multiple button selectors for robustness */
@@ -17,29 +17,20 @@ function countClips(): number {
   return Math.max(publish, like, dislike, share);
 }
 
-/** Find the URL of the most recently created song */
-function findNewSongUrl(): string | undefined {
-  // Look for links to /song/[id] in the song feed
+/** Get all current song IDs from the feed */
+function getSongIds(): Set<string> {
+  const ids = new Set<string>();
   const songLinks = Array.from(document.querySelectorAll('a[href*="/song/"]'));
-  
-  if (songLinks.length === 0) {
-    console.log('[SBG] No song links found');
-    return undefined;
-  }
-  
-  // The first link should be the most recent (newest at top)
-  const firstLink = songLinks[0] as HTMLAnchorElement;
-  const href = firstLink.href;
-  
-  console.log(`[SBG] Found ${songLinks.length} song links, first: ${href}`);
-  
-  // Extract the song ID from URL
-  const match = href.match(/\/song\/([\w-]+)/);
-  if (match) {
-    return `/song/${match[1]}`;
-  }
-  
-  return undefined;
+
+  songLinks.forEach(link => {
+    const href = (link as HTMLAnchorElement).href;
+    const match = href.match(/\/song\/([\w-]+)/);
+    if (match) {
+      ids.add(match[1]);
+    }
+  });
+
+  return ids;
 }
 
 /** Check for active loading/generating indicators */
@@ -56,8 +47,8 @@ function hasLoadingIndicators(container: Element): boolean {
 /**
  * Monitor for song generation completion using MutationObserver + polling.
  *
- * Detection strategies:
- *  1. Clip count increase (Publish/Like/Dislike/Share buttons)
+ * Strategies:
+ *  1. Clip count increase
  *  2. Loading indicators appear then disappear
  *  3. New audio elements appear
  */
@@ -70,7 +61,10 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
 
     const clipCountBefore = countClips();
     const audioCountBefore = document.querySelectorAll('audio').length;
-    console.log(`[SBG] Generation monitor started: ${clipCountBefore} clips, ${audioCountBefore} audio elements`);
+
+    // Capture existing song IDs to diff against later
+    const existingSongIds = getSongIds();
+    console.log(`[SBG] Generation monitor started: ${clipCountBefore} clips, ${existingSongIds.size} existing songs`);
 
     const finish = (result: MonitorResult) => {
       if (settled) return;
@@ -81,6 +75,20 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
       resolve(result);
     };
 
+    const getNewSongUrls = (): string[] => {
+      const currentIds = getSongIds();
+      const newUrls: string[] = [];
+
+      currentIds.forEach(id => {
+        if (!existingSongIds.has(id)) {
+          newUrls.push(`/song/${id}`);
+        }
+      });
+
+      console.log(`[SBG] Found ${newUrls.length} new songs: ${newUrls.join(', ')}`);
+      return newUrls;
+    };
+
     const checkCompletion = () => {
       checkCount++;
       const feed = resolveSelector('songFeed') ?? document.body;
@@ -88,11 +96,11 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
       const audioCountNow = document.querySelectorAll('audio').length;
       const loading = hasLoadingIndicators(feed);
 
-      // Log periodically (every 10th check, ~30 seconds)
+      // Log periodically
       if (checkCount % 10 === 0) {
         console.log(
           `[SBG] Monitor check #${checkCount}: clips=${clipCountNow} (was ${clipCountBefore}), ` +
-          `audio=${audioCountNow} (was ${audioCountBefore}), loading=${loading}, sawLoading=${sawLoading}`,
+          `loading=${loading}, sawLoading=${sawLoading}`,
         );
       }
 
@@ -111,19 +119,21 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
         console.log(`[SBG] Generation complete (clip count): ${clipCountNow} clips (was ${clipCountBefore})`);
         setTimeout(() => {
           if (!settled) {
-            const songUrl = findNewSongUrl();
-            console.log(`[SBG] New song URL: ${songUrl || 'not found'}`);
-            finish({ completed: true, timedOut: false, songUrl });
+            const songUrls = getNewSongUrls();
+            finish({ completed: true, timedOut: false, songUrls });
           }
-        }, 2000);
+        }, 2000); // Wait a bit for DOM to settle
         return;
       }
 
-      // Strategy 2: New audio elements appeared
+      // Strategy 2: New audio elements appeared (less reliable but good backup)
       if (audioCountNow > audioCountBefore) {
-        console.log(`[SBG] Generation complete (audio count): ${audioCountNow} audio (was ${audioCountBefore})`);
+        console.log(`[SBG] Generation complete (audio count): ${audioCountNow} audio`);
         setTimeout(() => {
-          if (!settled) finish({ completed: true, timedOut: false });
+          if (!settled) {
+            const songUrls = getNewSongUrls();
+            finish({ completed: true, timedOut: false, songUrls });
+          }
         }, 2000);
         return;
       }
@@ -133,7 +143,31 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
         const elapsed = Date.now() - loadingDisappearedAt;
         if (elapsed >= 3000) {
           console.log('[SBG] Generation complete (loading indicators cleared)');
-          finish({ completed: true, timedOut: false });
+          let songUrls = getNewSongUrls();
+
+          // If we found 1 song but expect 2, wait a bit longer to see if the second one pops up
+          // OR if we found 0 songs (maybe network lag), definitely wait
+          if (songUrls.length < 2) {
+            const found = songUrls.length;
+            console.log(`[SBG] Found ${found} song(s), waiting up to 15s for more...`);
+            let retries = 0;
+            const waitForSongs = setInterval(() => {
+              retries++;
+              const currentUrls = getNewSongUrls();
+
+              // Stop waiting if we found 2 (ideal)
+              // Or if we had 0 and now have at least 1 (good enough to proceed, though 2 is better)
+              // We'll aim for 2, but if we time out, we take what we have.
+              if (currentUrls.length >= 2 || retries >= 15) { // 15 * 1000ms = 15s
+                clearInterval(waitForSongs);
+                console.log(`[SBG] Finished waiting. Found: ${currentUrls.length}`);
+                finish({ completed: true, timedOut: false, songUrls: currentUrls });
+              }
+            }, 1000);
+            return;
+          }
+
+          finish({ completed: true, timedOut: false, songUrls });
           return;
         }
       }
@@ -153,19 +187,16 @@ export function monitorGeneration(timeoutMs: number): Promise<MonitorResult> {
     });
 
     // Polling fallback
-    const pollTimer = setInterval(checkCompletion, GENERATION_POLL_INTERVAL);
+    const pollTimer = setInterval(() => {
+      checkCompletion();
+      // Send heartbeat to keep Service Worker alive
+      chrome.runtime.sendMessage({ type: 'HEARTBEAT' }).catch(() => { });
+    }, GENERATION_POLL_INTERVAL);
 
     // Timeout — log state before timing out
     const timeoutTimer = setTimeout(() => {
-      const clipCountFinal = countClips();
-      const audioCountFinal = document.querySelectorAll('audio').length;
-      console.log(
-        `[SBG] Generation TIMED OUT after ${timeoutMs / 1000}s. ` +
-        `clips=${clipCountFinal} (was ${clipCountBefore}), ` +
-        `audio=${audioCountFinal} (was ${audioCountBefore}), ` +
-        `sawLoading=${sawLoading}`,
-      );
-      finish({ completed: false, timedOut: true });
+      console.log(`[SBG] Generation TIMED OUT after ${timeoutMs / 1000}s.`);
+      finish({ completed: false, timedOut: true, songUrls: [] });
     }, timeoutMs);
   });
 }

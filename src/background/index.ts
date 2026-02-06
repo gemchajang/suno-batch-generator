@@ -79,6 +79,15 @@ chrome.runtime.onMessage.addListener(
         handleDownloadWavFile(message, sendResponse);
         return true; // async response
 
+      case 'HEARTBEAT':
+        sendResponse({ ack: true });
+        break;
+
+      case 'GENERATE_VIA_API':
+        // Forward to active suno tab
+        handleDumpDom(sendResponse, 'GENERATE_VIA_API', message.payload);
+        return true;
+
       // Content script messages (JOB_PROGRESS, PAGE_STATUS, DOWNLOAD_READY)
       // are handled by the listener in queue-coordinator.ts
       default:
@@ -89,7 +98,11 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-function handleDumpDom(sendResponse: (response: any) => void, messageType: string = 'DUMP_DOM') {
+function handleDumpDom(
+  sendResponse: (response: any) => void,
+  messageType: string = 'DUMP_DOM',
+  payload?: any
+) {
   chrome.tabs.query({}, (tabs) => {
     const tab = tabs.find(
       (t) => t.url && /https:\/\/(www\.)?suno\.com/.test(t.url),
@@ -98,7 +111,7 @@ function handleDumpDom(sendResponse: (response: any) => void, messageType: strin
       sendResponse({ error: 'No suno.com tab found' });
       return;
     }
-    chrome.tabs.sendMessage(tab.id, { type: messageType }, (response) => {
+    chrome.tabs.sendMessage(tab.id, { type: messageType, payload }, (response) => {
       if (chrome.runtime.lastError) {
         sendResponse({ error: chrome.runtime.lastError.message });
         return;
@@ -153,6 +166,56 @@ async function handleExecInPage(
           target: { tabId },
           world: 'MAIN',
           func: reactDiagnosticsInPage,
+        });
+        break;
+
+      case 'REACT_GET_TOKENS':
+        results = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: async () => {
+            const debug: string[] = [];
+
+            // Strategy 1: Window Clerk Object (Official way)
+            try {
+              const clerk = (window as any).Clerk;
+              if (clerk && clerk.session) {
+                const token = await clerk.session.getToken();
+                if (token) return { token, source: 'clerk_global' };
+              } else {
+                debug.push('window.Clerk or session missing');
+              }
+            } catch (e: any) {
+              debug.push(`Clerk error: ${e.message}`);
+            }
+
+            // Strategy 2: LocalStorage scan
+            let foundKey = '';
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && key.includes('clerk-db-jwt')) {
+                // Found a potential key, check if it looks like a JWT
+                const val = localStorage.getItem(key);
+                if (val && val.startsWith('eyJ')) {
+                  return { token: val, source: 'localstorage', key };
+                }
+              }
+            }
+            debug.push('LocalStorage scan found no jwt');
+
+            // Strategy 3: Check cookies (rudimentary check from page context)
+            // Note: HttpOnly cookies aren't visible here, but sometimes they duplicate it.
+
+            return { error: 'Token not found', debug };
+          }
+        });
+        break;
+
+      case 'INJECT_INTERCEPTOR':
+        results = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: injectInterceptorInPage,
         });
         break;
 
@@ -305,29 +368,40 @@ function reactDiagnosticsInPage() {
 // ─────────────────────────────────────────────
 
 function handleDownloadWavFile(
-  message: { type: string; url: string; filename: string },
+  message: { type: string; url: string; filename: string; folder?: string; duration?: string },
   sendResponse: (response: any) => void,
 ) {
+  const settings = getSettings();
+  // Use message.folder if provided (per-job override), otherwise use global setting
+  const rawSubdir = message.folder || settings.downloadPath || 'SunoMusic';
+  const subdir = rawSubdir.replace(/[<>:"/\\|?*]/g, '_');
+  const finalFilename = `${subdir}/${message.filename}`;
+
+  if (message.duration) {
+    console.log(`[SBG] Saving song with duration: ${message.duration}`);
+    // We could persist this metadata if needed, for now just logging
+  }
+
   chrome.downloads.download({
     url: message.url,
-    filename: message.filename,
+    filename: finalFilename, // Chrome handles subdirectory creation
     saveAs: false, // Auto-save to default downloads folder
   }, (downloadId) => {
     if (chrome.runtime.lastError) {
       console.error('[SBG] Download failed:', chrome.runtime.lastError);
-      sendResponse({ 
-        success: false, 
-        error: chrome.runtime.lastError.message 
+      sendResponse({
+        success: false,
+        error: chrome.runtime.lastError.message
       });
     } else {
       console.log('[SBG] Download started:', downloadId);
-      
+
       // Monitor download completion
       const completeListener = (delta: chrome.downloads.DownloadDelta) => {
         if (delta.id === downloadId && delta.state?.current === 'complete') {
           console.log('[SBG] Download completed!');
           chrome.downloads.onChanged.removeListener(completeListener);
-          
+
           // Get file path
           chrome.downloads.search({ id: downloadId }, (results) => {
             if (results[0]) {
@@ -339,10 +413,64 @@ function handleDownloadWavFile(
           chrome.downloads.onChanged.removeListener(completeListener);
         }
       };
-      
+
       chrome.downloads.onChanged.addListener(completeListener);
-      
       sendResponse({ success: true, downloadId });
     }
   });
 }
+
+// ─────────────────────────────────────────────
+// INTERCEPTOR INJECTION
+// ─────────────────────────────────────────────
+
+function injectInterceptorInPage() {
+  if ((window as any).__SBG_INTERCEPTOR_INJECTED) return { status: 'already_injected' };
+
+  const originalFetch = window.fetch;
+  window.fetch = async function (...args) {
+    const [resource, config] = args;
+    const url = typeof resource === 'string' ? resource : (resource instanceof Request ? resource.url : '');
+
+    // Check if this is the target API
+    if (url.includes('/api/generate/') || url.includes('/api/gen/')) {
+      try {
+        // Clone the response so we can read it without consuming the original stream
+        const responseCallback = async (response: Response) => {
+          try {
+            const clone = response.clone();
+            const data = await clone.json();
+
+            // Send to content script via custom event
+            window.dispatchEvent(new CustomEvent('SBG_API_INTERCEPT', {
+              detail: {
+                url,
+                // method: config?.method || 'GET', 
+                requestBody: config?.body,
+                responseBody: data,
+                timestamp: Date.now()
+              }
+            }));
+          } catch (e) {
+            console.error('[SBG-Interceptor] Failed to parse response:', e);
+          }
+        };
+
+        // Execute original fetch and hook into the promise
+        const promise = originalFetch.apply(this, args);
+        promise.then(responseCallback).catch(() => { });
+        return promise;
+
+      } catch (e) {
+        console.error('[SBG-Interceptor] Error:', e);
+      }
+    }
+
+    return originalFetch.apply(this, args);
+  };
+
+  (window as any).__SBG_INTERCEPTOR_INJECTED = true;
+  console.log('[SBG] Network Interceptor Injected (MAIN world)');
+  return { status: 'injected' };
+}
+

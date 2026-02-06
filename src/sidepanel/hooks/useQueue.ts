@@ -15,6 +15,7 @@ export function useQueue() {
     delayBetweenSongs: 5000,
     generationTimeout: 180_000,
     maxRetries: 3,
+    downloadPath: 'SunoMusic',
   });
 
   // Listen for state updates from background

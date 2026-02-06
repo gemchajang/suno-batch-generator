@@ -3,6 +3,7 @@ export interface SongInput {
   style: string;
   lyrics: string;
   instrumental?: boolean;
+  downloadFolder?: string;
 }
 
 export type JobStatus =
