@@ -98,6 +98,7 @@ export interface Settings {
   generationTimeout: number;
   maxRetries: number;
   downloadPath: string;
+  downloadFormat: 'mp3' | 'wav';
 }
 
 export type PanelToBgMessage =
@@ -139,10 +140,20 @@ export interface GenerateViaApiMessage {
   };
 }
 
+// Proxy API Request (Bypass CORS)
+export interface ProxyApiRequestMessage {
+  type: 'PROXY_API_REQUEST';
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: any;
+}
+
 export type ContentToBgMessage =
   | JobProgressMessage
   | PageStatusMessage
   | DownloadReadyMessage
   | DownloadWavFileMessage
   | ExecInPageMessage
-  | HeartbeatMessage;
+  | HeartbeatMessage
+  | ProxyApiRequestMessage;

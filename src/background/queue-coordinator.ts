@@ -6,6 +6,7 @@ import {
   DEFAULT_MAX_RETRIES,
   STORAGE_KEY_QUEUE,
   STORAGE_KEY_SETTINGS,
+  DEFAULT_DOWNLOAD_FORMAT,
 } from '../config/constants';
 
 let state: QueueState = {
@@ -19,6 +20,7 @@ let settings: Settings = {
   generationTimeout: DEFAULT_GENERATION_TIMEOUT,
   maxRetries: DEFAULT_MAX_RETRIES,
   downloadPath: 'SunoMusic', // Default subdirectory
+  downloadFormat: DEFAULT_DOWNLOAD_FORMAT,
 };
 
 let loopActive = false;

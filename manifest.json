@@ -9,11 +9,14 @@
     "tabs",
     "scripting",
     "storage",
-    "downloads"
+    "downloads",
+    "webRequest"
   ],
   "host_permissions": [
     "https://suno.com/*",
-    "https://www.suno.com/*"
+    "https://www.suno.com/*",
+    "https://studio-api.prod.suno.com/*",
+    "https://cdn1.suno.ai/*"
   ],
   "side_panel": {
     "default_path": "side_panel.html"

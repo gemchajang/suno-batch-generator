@@ -27,3 +27,6 @@ export const STORAGE_KEY_QUEUE = 'suno_batch_queue';
 
 /** Storage key for settings */
 export const STORAGE_KEY_SETTINGS = 'suno_batch_settings';
+
+/** Default download format */
+export const DEFAULT_DOWNLOAD_FORMAT = 'mp3';

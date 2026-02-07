@@ -79,6 +79,10 @@ chrome.runtime.onMessage.addListener(
         handleDownloadWavFile(message, sendResponse);
         return true; // async response
 
+      case 'PROXY_API_REQUEST':
+        handleProxyApiRequest(message, sendResponse);
+        return true; // async response
+
       case 'HEARTBEAT':
         sendResponse({ ack: true });
         break;
@@ -97,6 +101,47 @@ chrome.runtime.onMessage.addListener(
     return false;
   },
 );
+
+async function handleProxyApiRequest(
+  message: any,
+  sendResponse: (response: any) => void
+) {
+  try {
+    const { url, method, headers, body } = message;
+
+    // Perform the fetch in background (CORS bypassed via host permissions)
+    const options: RequestInit = {
+      method,
+      headers: headers || {},
+      body: body ? JSON.stringify(body) : undefined
+    };
+
+    const response = await fetch(url, options);
+
+    // We need to return the body, but response.json() might fail if it's empty
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text; // Fallback to text
+    }
+
+    sendResponse({
+      ok: response.ok,
+      status: response.status,
+      data
+    });
+
+  } catch (e: any) {
+    console.error('[SBG] Proxy Request Error:', e);
+    sendResponse({
+      ok: false,
+      status: 0,
+      error: e.message
+    });
+  }
+}
 
 function handleDumpDom(
   sendResponse: (response: any) => void,
@@ -474,3 +519,37 @@ function injectInterceptorInPage() {
   return { status: 'injected' };
 }
 
+// ─────────────────────────────────────────────
+// HEADER INTERCEPTION
+// ─────────────────────────────────────────────
+
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    const { requestHeaders } = details;
+    if (!requestHeaders) return;
+
+    let browserToken: string | undefined;
+    let deviceId: string | undefined;
+
+    for (const h of requestHeaders) {
+      const name = h.name.toLowerCase();
+      if (name === 'browser-token') {
+        browserToken = h.value;
+      } else if (name === 'device-id') {
+        deviceId = h.value;
+      }
+    }
+
+    if (browserToken && deviceId) {
+      // Store them
+      chrome.storage.local.set({
+        'suno_browser_token': browserToken,
+        'suno_device_id': deviceId,
+        'suno_token_timestamp': Date.now()
+      });
+      // console.log('[SBG] Captured Suno tokens via webRequest');
+    }
+  },
+  { urls: ['https://studio-api.prod.suno.com/*'] },
+  ['requestHeaders']
+);

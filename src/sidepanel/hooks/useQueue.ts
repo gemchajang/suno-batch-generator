@@ -16,6 +16,7 @@ export function useQueue() {
     generationTimeout: 180_000,
     maxRetries: 3,
     downloadPath: 'SunoMusic',
+    downloadFormat: 'mp3',
   });
 
   // Listen for state updates from background

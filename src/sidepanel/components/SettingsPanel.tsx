@@ -45,6 +45,31 @@ export default function SettingsPanel({ settings, onUpdate, disabled }: Props) {
             max={10}
             disabled={disabled}
           />
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-gray-400 flex-1">Download Format</label>
+            <div className="flex gap-2 bg-gray-800 p-1 rounded border border-gray-600">
+              <button
+                onClick={() => onUpdate({ downloadFormat: 'mp3' })}
+                disabled={disabled}
+                className={`px-2 py-0.5 text-xs rounded transition-colors ${settings.downloadFormat === 'mp3'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-400 hover:text-gray-200'
+                  }`}
+              >
+                MP3
+              </button>
+              <button
+                onClick={() => onUpdate({ downloadFormat: 'wav' })}
+                disabled={disabled}
+                className={`px-2 py-0.5 text-xs rounded transition-colors ${settings.downloadFormat === 'wav'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-400 hover:text-gray-200'
+                  }`}
+              >
+                WAV
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

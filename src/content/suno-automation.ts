@@ -100,8 +100,11 @@ export async function executeJob(
   // Map to store audio URLs from polling
   const audioUrls = new Map<string, string | null>();
 
+  // For WAV downloads, we must wait for 'complete' status, 'streaming' is not enough for conversion
+  const waitForComplete = settings.downloadFormat === 'wav';
+
   try {
-    const results = await Promise.all(songIds.map(id => pollForCompletion(id, token)));
+    const results = await Promise.all(songIds.map(id => pollForCompletion(id, token, waitForComplete)));
     songIds.forEach((id, index) => {
       audioUrls.set(id, results[index]);
     });
@@ -124,7 +127,7 @@ export async function executeJob(
     checkAbort();
     try {
       const audioUrl = audioUrls.get(songId);
-      await downloadSongViaAPI(songId, downloadFolder, job.input.title, audioUrl);
+      await downloadSongViaAPI(songId, downloadFolder, job.input.title, audioUrl, settings.downloadFormat);
       log(`✅ Download processed for ${songId}`);
     } catch (e: any) {
       log(`❌ Failed to download ${songId}: ${e.message}`);
@@ -162,7 +165,7 @@ function waitForGenerationIntercept(timeoutMs: number): Promise<string[]> {
 }
 
 // Polling Helper
-async function pollForCompletion(songId: string, token: string): Promise<string | null> {
+async function pollForCompletion(songId: string, token: string, waitForComplete: boolean = false): Promise<string | null> {
   const headers = { 'Authorization': `Bearer ${token}` };
   const startTime = Date.now();
   const maxWait = 300000; // 5 min
@@ -175,28 +178,30 @@ async function pollForCompletion(songId: string, token: string): Promise<string 
 
       if (res.ok) {
         const data = await res.json();
-        // Feed returns array of clips
         const clips = Array.isArray(data) ? data : data.clips;
         const clip = clips?.find((c: any) => c.id === songId);
 
         if (clip) {
-          if (clip.status === 'streaming' || clip.status === 'complete') {
-            log(`[SBG] Polling success: ${songId} is ready.`);
+          if (clip.status === 'complete') {
+            log(`[SBG] Polling success: ${songId} is complete.`);
             return clip.audio_url || null;
           }
+          if (!waitForComplete && clip.status === 'streaming') {
+            log(`[SBG] Polling success: ${songId} is streaming (sufficient for MP3).`);
+            return clip.audio_url || null;
+          }
+
           if (clip.status === 'error') {
             throw new Error(`Song status is 'error'`);
           }
           log(`[SBG] Song ${songId} status: ${clip.status}...`);
         } else {
-          // Fallback check on gen endpoint if feed doesn't have it (rare)
           log(`[SBG] Song ${songId} not in feed yet...`);
         }
       } else {
         log(`[SBG] Polling ${songId}: ${res.status} (retrying)`);
       }
     } catch (e) {
-      // ignore transient
       console.log(`[SBG] Polling exception:`, e);
     }
     await delay(5000);
@@ -211,36 +216,53 @@ async function pollForCompletion(songId: string, token: string): Promise<string 
  * Pure API-based download function.
  * If audioUrl is provided, we skip the convert_wav dance and use it directly.
  */
-async function downloadSongViaAPI(songId: string, folder?: string, title?: string, knownAudioUrl?: string | null): Promise<void> {
-  log(`[API Download] Starting for song: ${songId}`);
+async function downloadSongViaAPI(songId: string, folder?: string, title?: string, knownAudioUrl?: string | null, format: 'mp3' | 'wav' = 'mp3'): Promise<void> {
+  log(`[API Download] Starting for song: ${songId}. Format: ${format}`);
 
-  // Step 0: Get Clerk Token (needed for headers if we have to fetch metadata)
-  const token = await getClerkToken();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // Step 0: Get Tokens
+  const token = await getClerkToken(); // Authorization Bearer
+  const storage = await chrome.storage.local.get(['suno_browser_token', 'suno_device_id']);
+  const browserToken = storage.suno_browser_token;
+  const deviceId = storage.suno_device_id;
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  if (format === 'wav' && (!browserToken || !deviceId)) {
+    log('[API Download] ⚠️ Missing browser-token or device-id. WAV download might fail. Ensure you have refreshed the page.');
   }
 
-  let downloadUrl = knownAudioUrl || '';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (browserToken) headers['browser-token'] = browserToken;
+  if (deviceId) {
+    headers['device-id'] = deviceId;
+    headers['affirm-device-id'] = deviceId;
+  }
+
+  let downloadUrl = '';
   let duration = '';
 
-  // Only try legacy conversion if we don't have a URL
-  if (!downloadUrl) {
-    log('[API Download] No audio URL provided, trying legacy convert_wav...');
+  // STRATEGY SELECTION
+  if (format === 'mp3') {
+    log(`[API Download] Format set to MP3 using known URL or CDN fallback.`);
+    if (knownAudioUrl) {
+      downloadUrl = knownAudioUrl;
+    } else {
+      downloadUrl = `https://cdn1.suno.ai/${songId}.mp3`;
+    }
+  } else {
+    // WAV STRATEGY
+    log('[API Download] Format set to WAV. Attempting conversion (via Background Proxy)...');
 
     // Step 1: Request WAV conversion
     const convertUrl = `https://studio-api.prod.suno.com/api/gen/${songId}/convert_wav/`;
     try {
-      const convertResp = await fetch(convertUrl, {
-        method: 'POST',
-        credentials: 'omit',
-        headers
-      });
+      // Use PROXY to bypass CORS
+      const convertResp = await proxyRequest(convertUrl, 'POST', headers);
 
       if (!convertResp.ok) {
-        // 400 likely means it's already converted OR it's a v3/v4 song that doesn't use this
-        log(`[API Download] convert_wav status: ${convertResp.status} (might be already converted)`);
+        log(`[API Download] convert_wav status: ${convertResp.status} (might be already converted or 403)`);
       }
     } catch (e) {
       log(`[API Download] convert_wav error: ${e}`);
@@ -248,66 +270,81 @@ async function downloadSongViaAPI(songId: string, folder?: string, title?: strin
 
     // Step 2: Poll for wav_file URL
     const metaUrl = `https://studio-api.prod.suno.com/api/gen/${songId}/wav_file/`;
-    for (let i = 0; i < 5; i++) { // Poll for up to 5s
+    for (let i = 0; i < 15; i++) { // Poll for up to 30s
       try {
-        const resp = await fetch(metaUrl, { method: 'GET', credentials: 'omit', headers });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.url) {
-            downloadUrl = data.url;
-            duration = data.duration; // sometimes available
+        const resp = await proxyRequest(metaUrl, 'GET', headers);
+        if (resp.ok && resp.data) {
+          if (resp.data.url) {
+            downloadUrl = resp.data.url;
+            duration = resp.data.duration;
+            log(`[API Download] WAV URL found: ${downloadUrl}`);
             break;
+          } else {
+            if (i % 3 === 0) log(`[API Download] Waiting for WAV url...`);
           }
         }
       } catch (e) { }
-      await delay(1000);
+      await delay(2000);
+    }
+
+    // Step 3: Increment Action Count (Important for stats/anti-abuse)
+    try {
+      if (downloadUrl) {
+        await proxyRequest(`https://studio-api.prod.suno.com/api/gen/${songId}/increment_action_count/`, 'POST', headers, { action: 'download_audio_wav' });
+      }
+    } catch (e) {
+      log(`[API Download] increment_action_count failed: ${e}`);
+    }
+
+    // Step 4: Billing Authorization
+    try {
+      if (downloadUrl) {
+        log(`[API Download] Authorizing download via billing API...`);
+        const billingRes = await proxyRequest(`https://studio-api.prod.suno.com/api/billing/clips/${songId}/download/`, 'POST', headers);
+        if (!billingRes.ok) {
+          log(`[API Download] Billing authorization warning: ${billingRes.status}`);
+        }
+      }
+    } catch (e) {
+      log(`[API Download] Billing authorization failed: ${e}`);
+    }
+
+    // Fallback: If polling failed, try manual construction
+    if (!downloadUrl) {
+      log('[API Download] WAV URL not found in metadata. Guessing standard CDN URL...');
+      downloadUrl = `https://cdn1.suno.ai/${songId}.wav`;
     }
   }
 
-  // Construct filename from title if widely available, else fallback
-  let filename = `suno-${songId}.wav`;
+  // Construct filename
+  let ext = format === 'wav' ? '.wav' : '.mp3';
+  if (format === 'wav' && !downloadUrl) ext = '.mp3';
+
+  let filename = `suno-${songId}${ext}`;
   if (title) {
-    // Sanitize filename: remove chars invalid in Windows/Linux filenames
     const sanitized = title.replace(/[<>:"/\\|?*]/g, '_').trim();
     if (sanitized.length > 0) {
-      filename = `${sanitized}.wav`;
+      filename = `${sanitized}${ext}`;
     }
   }
 
   if (!downloadUrl) {
-    // Fallback: Try CDN guessing if everything else failed
-    log(`[API Download] Timeout polling wav_file, guessing CDN URL...`);
-    downloadUrl = `https://cdn1.suno.ai/${songId}.wav`; // Legacy guess
+    throw new Error('No download URL found');
   }
 
   log(`[API Download] Final URL to fetch: ${downloadUrl}`);
 
-
-
-
-  // Step 3: Trigger Download via Background
-  log(`[API Download] Fetching blob from: ${downloadUrl}`);
-
-  // Fetch Blob in content script to avoid CORS issues in background?
-  // Actually, background script has host permissions, but fetching here and passing objectURL is safer/proven.
-
-  const blobResp = await fetch(downloadUrl);
-  if (!blobResp.ok) throw new Error(`Failed to fetch WAV file: ${blobResp.status}`);
-
-  const blob = await blobResp.blob();
-  const objectUrl = URL.createObjectURL(blob);
-
-  log(`[API Download] Blob size: ${blob.size}`);
+  // Step 5: Trigger Download
+  // Rely on background download directly.
 
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
       type: 'DOWNLOAD_WAV_FILE',
-      url: objectUrl,
+      url: downloadUrl, // Pass URL directly, let Chrome handle it
       filename: filename,
       folder,
       duration
     }, (res) => {
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 10000); // 10s buffer
       if (res?.success) {
         resolve();
       } else {
@@ -317,12 +354,43 @@ async function downloadSongViaAPI(songId: string, folder?: string, title?: strin
   });
 }
 
-function log(msg: string): void {
-  console.log(`[SBG] ${msg}`);
-  // Keep-alive: send log to background
+/**
+ * Helper to proxy API requests via background script to bypass CORS
+ */
+async function proxyRequest(url: string, method: string, headers?: Record<string, string>, body?: any): Promise<{ ok: boolean, status: number, data?: any }> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: 'PROXY_API_REQUEST',
+      url,
+      method,
+      headers,
+      body
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+// Helper to log to console and Side Panel
+function log(msg: string) {
+  console.log(msg);
   try {
-    chrome.runtime.sendMessage({ type: 'HEARTBEAT', payload: msg }).catch(() => { });
-  } catch (e) { /* ignore */ }
+    const logEntry = {
+      type: 'LOG',
+      payload: {
+        level: 'info',
+        message: msg,
+        timestamp: Date.now()
+      }
+    };
+    chrome.runtime.sendMessage(logEntry).catch(() => { });
+  } catch (e) {
+    // ignore
+  }
 }
 
 function isCreatePage(): boolean {
