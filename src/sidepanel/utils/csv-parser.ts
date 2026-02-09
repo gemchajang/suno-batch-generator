@@ -14,26 +14,37 @@ export function parseCsv(text: string): SongInput[] {
   const styleIdx = headers.indexOf('style');
   const lyricsIdx = headers.indexOf('lyrics');
   const instrIdx = headers.indexOf('instrumental');
+  const folderIdx = headers.indexOf('downloadfolder');
 
-  if (titleIdx === -1 || styleIdx === -1 || lyricsIdx === -1) {
-    throw new Error('CSV must have title, style, and lyrics columns');
+  if (titleIdx === -1 || styleIdx === -1) {
+    throw new Error('CSV must at least have title and style columns');
   }
 
   const results: SongInput[] = [];
 
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCsvLine(lines[i]);
-    if (cols.length < 3) continue;
+    if (cols.length < 2) continue;
 
-    const instrumental = instrIdx !== -1
+    const instrumental = instrIdx !== -1 && instrIdx < cols.length
       ? cols[instrIdx]?.trim().toLowerCase() === 'true'
       : false;
+
+    // Use empty string if lyrics column is missing or empty
+    const lyrics = lyricsIdx !== -1 && lyricsIdx < cols.length
+      ? cols[lyricsIdx]?.trim() ?? ''
+      : '';
+
+    const downloadFolder = folderIdx !== -1 && folderIdx < cols.length
+      ? cols[folderIdx]?.trim()
+      : undefined;
 
     results.push({
       title: cols[titleIdx]?.trim() ?? '',
       style: cols[styleIdx]?.trim() ?? '',
-      lyrics: cols[lyricsIdx]?.trim() ?? '',
+      lyrics,
       instrumental,
+      downloadFolder,
     });
   }
 

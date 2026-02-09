@@ -45,6 +45,7 @@ export function parseFile(fileName: string, content: string): ParseResult {
       style: song.style.trim(),
       lyrics: song.lyrics?.trim() ?? '',
       instrumental: !!song.instrumental,
+      downloadFolder: song.downloadFolder?.trim(),
     });
   });
 
