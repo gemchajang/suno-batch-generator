@@ -417,10 +417,26 @@ function handleDownloadWavFile(
   sendResponse: (response: any) => void,
 ) {
   const settings = getSettings();
-  // Use message.folder if provided (per-job override), otherwise use global setting
-  const rawSubdir = message.folder || settings.downloadPath || 'SunoMusic';
-  const subdir = rawSubdir.replace(/[<>:"/\\|?*]/g, '_');
-  const finalFilename = `${subdir}/${message.filename}`;
+
+  // Base directory from settings (default: SunoMusic)
+  const baseDirRaw = settings.downloadPath || 'SunoMusic';
+  const baseDir = baseDirRaw.replace(/[<>:"/\\|?*]/g, '_');
+
+  // Job-specific subfolder (if provided)
+  let subDir = '';
+  if (message.folder) {
+    // Sanitize the folder name but allow multiple levels if needed? 
+    // For safety, let's just sanitize it as a single folder name for now to avoid breakout
+    // If user wants nested, they can use "_" or we can revisit.
+    // Actually, let's treat it as a single child folder for simplicity and safety.
+    subDir = message.folder.replace(/[<>:"/\\|?*]/g, '_');
+  }
+
+  // Construct final path: Base/Sub/Filename
+  // If subDir is empty, just Base/Filename
+  const finalPath = subDir ? `${baseDir}/${subDir}` : baseDir;
+
+  const finalFilename = `${finalPath}/${message.filename}`;
 
   if (message.duration) {
     console.log(`[SBG] Saving song with duration: ${message.duration}`);
