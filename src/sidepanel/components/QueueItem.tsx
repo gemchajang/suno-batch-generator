@@ -43,14 +43,14 @@ export default function QueueItem({ job, isCurrent }: Props) {
     });
   };
 
-  const canRun = ['pending', 'failed', 'skipped'].includes(job.status);
+  const canRun = ['pending', 'failed', 'skipped', 'completed'].includes(job.status);
   const canDownload = ['completed', 'failed'].includes(job.status); // Allow forcing download even on fail
 
   return (
     <div
       className={`p-2 rounded border text-xs transition-colors ${isCurrent
-          ? 'border-blue-500 bg-blue-900/20'
-          : 'border-gray-700 bg-gray-800/50'
+        ? 'border-blue-500 bg-blue-900/20'
+        : 'border-gray-700 bg-gray-800/50'
         }`}
     >
       <div className="flex items-center justify-between">
