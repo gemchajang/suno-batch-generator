@@ -4,10 +4,10 @@ import QueueItem from './QueueItem';
 
 interface Props {
   jobs: Job[];
-  currentJobId: string | null;
+  activeJobIds: string[];
 }
 
-export default function QueueList({ jobs, currentJobId }: Props) {
+export default function QueueList({ jobs, activeJobIds }: Props) {
   if (jobs.length === 0) {
     return (
       <div className="text-center text-gray-500 py-8 text-sm">
@@ -19,7 +19,7 @@ export default function QueueList({ jobs, currentJobId }: Props) {
   return (
     <div className="space-y-1.5 overflow-y-auto max-h-[40vh]">
       {jobs.map((job) => (
-        <QueueItem key={job.id} job={job} isCurrent={job.id === currentJobId} />
+        <QueueItem key={job.id} job={job} isCurrent={activeJobIds.includes(job.id)} />
       ))}
     </div>
   );

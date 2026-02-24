@@ -8,15 +8,17 @@ import QueueList from './components/QueueList';
 import LogPanel from './components/LogPanel';
 import SettingsPanel from './components/SettingsPanel';
 
-import ApiLabs from './components/ApiLabs';
+
+import LibraryPanel from './components/LibraryPanel';
 
 export default function App() {
-  const [view, setView] = React.useState<'queue' | 'labs'>('queue');
+  const [view, setView] = React.useState<'queue' | 'library'>('queue');
 
   const {
     jobs,
     running,
-    currentJobId,
+    activeJobIds,
+    library,
     settings,
     addJobs,
     start,
@@ -61,11 +63,12 @@ export default function App() {
         >
           Queue
         </button>
+
         <button
-          onClick={() => setView('labs')}
-          className={`flex-1 py-2 text-sm font-medium ${view === 'labs' ? 'text-white border-b-2 border-indigo-500' : 'text-gray-400 hover:text-gray-200'}`}
+          onClick={() => setView('library')}
+          className={`flex-1 py-2 text-sm font-medium ${view === 'library' ? 'text-white border-b-2 border-indigo-500' : 'text-gray-400 hover:text-gray-200'}`}
         >
-          API Labs
+          Library
         </button>
       </div>
 
@@ -91,7 +94,7 @@ export default function App() {
             progress={progress}
           />
 
-          <QueueList jobs={jobs} currentJobId={currentJobId} />
+          <QueueList jobs={jobs} activeJobIds={activeJobIds} />
 
           <div className="mt-auto space-y-3">
             <LogPanel logs={logs} onClear={clearLogs} />
@@ -122,7 +125,22 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <ApiLabs />
+        <div className="flex-1 p-3 overflow-hidden">
+          <LibraryPanel
+            disabled={running}
+            activeJobIds={activeJobIds}
+            jobs={jobs}
+            library={library}
+            onDownload={(songId, title) => {
+              addLog('info', `Requested manual download for: ${songId}`);
+              // Sends to background to trigger the download logic
+              chrome.runtime.sendMessage({
+                type: 'MANUAL_DOWNLOAD_JOB',
+                payload: { jobId: songId, title }
+              });
+            }}
+          />
+        </div>
       )}
     </div>
   );

@@ -6,7 +6,8 @@ import type { QueueStateUpdate, Settings } from '../../types/messages';
 const defaultState: QueueState = {
   jobs: [],
   running: false,
-  currentJobId: null,
+  activeJobIds: [],
+  library: [],
 };
 
 export function useQueue() {
@@ -72,7 +73,8 @@ export function useQueue() {
   return {
     jobs: state.jobs,
     running: state.running,
-    currentJobId: state.currentJobId,
+    activeJobIds: state.activeJobIds,
+    library: state.library || [],
     settings,
     addJobs,
     start,

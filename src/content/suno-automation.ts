@@ -8,26 +8,30 @@ import { resolveSelectorWithWait } from './selectors-runtime';
 
 export type ProgressCallback = (status: string, error?: string) => void;
 
-let aborted = false;
+let abortedJobs = new Set<string>();
 let running = false;
-let currentJobId: string | null = null;
 
 // Version Stamp for Verification
 console.log('[SBG] Automation Logic Iteration 15 Loaded (XPath + Exclusions)');
 
-export function abortCurrentJob(): void {
-  aborted = true;
+export function abortJob(jobId: string): void {
+  abortedJobs.add(jobId);
 }
 
+function isAborted(jobId: string): boolean {
+  return abortedJobs.has(jobId);
+}
+
+
 /**
- * Execute a single job: fill form → create → wait → download.
+ * Step A: Fill form and click Create. Returns intercepted Song IDs.
  */
-export async function executeJob(
+export async function triggerJob(
   job: Job,
   settings: Settings,
   onProgress: ProgressCallback,
-): Promise<void> {
-  aborted = false;
+): Promise<string[]> {
+  abortedJobs.delete(job.id);
 
   // Step 1: CHECK
   log(`Starting job: ${job.input.title} (UI Control + Intercept)`);
@@ -40,12 +44,12 @@ export async function executeJob(
   // Step 2: FILL - switch to Custom mode
   log('Switching to Custom mode...');
   await switchToCustomMode();
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Clear existing form first
   log('Clearing form...');
   await clearForm();
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Fill lyrics first (skip if instrumental — leave blank for instrumental)
   if (!job.input.instrumental && job.input.lyrics) {
@@ -53,18 +57,18 @@ export async function executeJob(
     const lyricsEl = await resolveSelectorWithWait('lyricsInput');
     if (!lyricsEl) throw new Error('Could not find lyrics input');
     await fillInput(lyricsEl, job.input.lyrics);
-    checkAbort();
+    if (isAborted(job.id)) throw new Error('Job aborted');
   }
 
   // Fill style
   log('Filling style...');
   await fillStyleField(job.input.style);
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Fill title
   log('Filling title...');
   await fillTitleField(job.input.title);
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Step 3: CREATE & INTERCEPT
   log('Clicking Create button and waiting for network response...');
@@ -88,10 +92,24 @@ export async function executeJob(
     throw new Error(`Failed to capture generation request: ${e.message}`);
   }
 
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
+
+  return songIds;
+}
+
+/**
+ * Step B: Monitor generation and download.
+ */
+export async function monitorJob(
+  job: Job,
+  settings: Settings,
+  songIds: string[],
+  onProgress: ProgressCallback,
+): Promise<void> {
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Step 4: WAIT (Poll API)
-  log('Waiting for generation to complete (API polling)...');
+  log(`Waiting for generation to complete (API polling) for job ${job.id}...`);
   onProgress('waiting');
 
   const token = await getClerkToken();
@@ -104,7 +122,7 @@ export async function executeJob(
   const waitForComplete = settings.downloadFormat === 'wav';
 
   try {
-    const results = await Promise.all(songIds.map(id => pollForCompletion(id, token, waitForComplete)));
+    const results = await Promise.all(songIds.map(id => pollForCompletion(job.id, id, token, waitForComplete)));
     songIds.forEach((id, index) => {
       audioUrls.set(id, results[index]);
     });
@@ -112,7 +130,7 @@ export async function executeJob(
     throw new Error(`Generation polling failed: ${e.message}`);
   }
 
-  checkAbort();
+  if (isAborted(job.id)) throw new Error('Job aborted');
 
   // Step 5: DOWNLOAD
   log('Generation complete. Triggering downloads...');
@@ -124,7 +142,7 @@ export async function executeJob(
   }
 
   for (const songId of songIds) {
-    checkAbort();
+    if (isAborted(job.id)) throw new Error('Job aborted');
     try {
       const audioUrl = audioUrls.get(songId);
       await downloadSongViaAPI(songId, downloadFolder, job.input.title, audioUrl, settings.downloadFormat);
@@ -134,7 +152,7 @@ export async function executeJob(
     }
   }
 
-  log('Job completed!');
+  log(`Job ${job.id} completed!`);
   onProgress('completed');
 }
 
@@ -165,13 +183,13 @@ function waitForGenerationIntercept(timeoutMs: number): Promise<string[]> {
 }
 
 // Polling Helper
-async function pollForCompletion(songId: string, token: string, waitForComplete: boolean = false): Promise<string | null> {
+async function pollForCompletion(jobId: string, songId: string, token: string, waitForComplete: boolean = false): Promise<string | null> {
   const headers = { 'Authorization': `Bearer ${token}` };
   const startTime = Date.now();
   const maxWait = 300000; // 5 min
 
   while (Date.now() - startTime < maxWait) {
-    if (aborted) throw new Error('Job aborted');
+    if (isAborted(jobId)) throw new Error('Job aborted');
     try {
       // Try generic feed API which handles multiple IDs and new logic better
       const res = await fetch(`https://studio-api.prod.suno.com/api/feed/v2?ids=${songId}`, { headers });
@@ -604,7 +622,7 @@ async function pageContextDiagnostics(): Promise<void> {
 
 export function resetCycle() {
   running = false;
-  currentJobId = null;
+  abortedJobs.clear();
   log('[SBG] Cycle state reset.');
 }
 
@@ -633,7 +651,10 @@ export async function generateSongsFromApi(jobs: any[]) {
 
     // 2. Process Jobs
     for (const job of jobs) {
-      checkAbort();
+      // Local abort check for API flow
+      // We don't have a jobId here, so we assume API flow cannot be aborted via abortJob(id) yet 
+      // unless we pass a jobId or check if running is false.
+      if (!running) throw new Error('Canceled');
       const { prompt, tags, title, mv, make_instrumental } = job;
       log(`[SBG] Generating: "${title || prompt}"...`);
 
@@ -690,7 +711,7 @@ export async function generateSongsFromApi(jobs: any[]) {
         const startTime = Date.now();
 
         while (true) {
-          checkAbort();
+          if (!running) throw new Error('Canceled');
 
           // Timeout check (e.g., 5 minutes per clip)
           if (Date.now() - startTime > 300000) {
@@ -777,25 +798,76 @@ export async function testDownloadLastGeneratedSong(): Promise<void> {
 
   // Try to find title
   let title = 'Test Download Song';
-  // Try to find title element near the link (very heuristic)
-  const container = songLink.closest('div[class*="css-"]'); // Generic container
-  if (container) {
-    const titleEl = container.querySelector('[class*="title"], h3, h4');
-    if (titleEl && titleEl.textContent) {
-      title = titleEl.textContent.trim();
-    }
+
+  // Try to find title
+  const titleEl = document.querySelector('div.font-sans.text-lg');
+  if (titleEl && titleEl.textContent) title = titleEl.textContent;
+
+  log(`[Test] Triggering test download for song ${songId} (${title})`);
+
+  // Just use existing parallel download logic since we are already authenticated
+  await downloadSongViaAPI(songId, 'Test_Downloads', title);
+  log('[Test] Download request completed.');
+}
+
+/**
+ * Fetch the current "Library" list from the suno API (v3 feed).
+ */
+export async function fetchLibrarySongs(): Promise<{ id: string, title: string, imageUrl?: string }[]> {
+  log('[SBG] Fetching library songs from Suno API (v3)...');
+
+  const token = await getClerkToken();
+  const storage = await chrome.storage.local.get(['suno_browser_token', 'suno_device_id']);
+  const browserToken = storage.suno_browser_token;
+  const deviceId = storage.suno_device_id;
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (browserToken) headers['browser-token'] = browserToken;
+  if (deviceId) {
+    headers['device-id'] = deviceId;
   }
 
-  log(`[Test] Found song: ${songId} ("${title}")`);
-  await downloadSongViaAPI(songId, 'TestDownload', title);
+  const payload = {
+    cursor: null,
+    limit: 50,
+    filters: {
+      disliked: "False",
+      trashed: "False",
+      fromStudioProject: { presence: "False" },
+      stem: { presence: "False" },
+      workspace: { presence: "True", workspaceId: "default" }
+    }
+  };
+
+  try {
+    const resp = await proxyRequest('https://studio-api.prod.suno.com/api/feed/v3', 'POST', headers, payload);
+
+    if (!resp.ok) {
+      throw new Error(`API responded with status: ${resp.status}`);
+    }
+
+    const data = resp.data;
+    let clips = [];
+    if (Array.isArray(data)) {
+      clips = data;
+    } else if (data && Array.isArray(data.clips)) {
+      clips = data.clips;
+    }
+
+    const songs = clips.map((clip: any) => ({
+      id: clip.id,
+      title: clip.title || `Generated Song ${clip.id.substring(0, 5)}`,
+      imageUrl: clip.image_large_url || clip.image_url
+    }));
+
+    log(`[SBG] Fetched ${songs.length} songs from API.`);
+    return songs;
+  } catch (e: any) {
+    log(`[SBG] Failed to fetch library from API: ${e.message}`);
+    throw new Error('Failed to fetch songs from the network API.');
+  }
 }
-
-
-
-function checkAbort(): void {
-  if (aborted) throw new Error('Job aborted');
-}
-
-
-
-

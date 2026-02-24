@@ -21,13 +21,21 @@ export interface Job {
   input: SongInput;
   status: JobStatus;
   error?: string;
+  songIds?: string[];
   retryCount: number;
   createdAt: number;
   updatedAt: number;
 }
 
+export interface LibrarySong {
+  id: string;
+  title: string;
+  imageUrl?: string;
+}
+
 export interface QueueState {
   jobs: Job[];
   running: boolean;
-  currentJobId: string | null;
+  activeJobIds: string[];
+  library: LibrarySong[];
 }

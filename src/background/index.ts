@@ -8,6 +8,10 @@ import {
   startQueue,
   stopQueue,
   updateSettings,
+  manualRunJob,
+  manualDownloadJob,
+  checkPageWithRetry,
+  addLibrarySongs
 } from './queue-coordinator';
 import { initDownloadManager } from './download-manager';
 
@@ -62,6 +66,16 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ ok: true });
         break;
 
+      case 'MANUAL_RUN_JOB':
+        manualRunJob(message.payload.jobId);
+        sendResponse({ ok: true });
+        break;
+
+      case 'MANUAL_DOWNLOAD_JOB':
+        manualDownloadJob(message.payload.jobId, message.payload.title);
+        sendResponse({ ok: true });
+        break;
+
       case 'DUMP_DOM':
         // Forward to content script and relay result back
         handleDumpDom(sendResponse);
@@ -86,6 +100,15 @@ chrome.runtime.onMessage.addListener(
       case 'HEARTBEAT':
         sendResponse({ ack: true });
         break;
+
+      case 'ADD_LIBRARY_SONGS':
+        addLibrarySongs(message.payload);
+        sendResponse({ ok: true });
+        break;
+
+      case 'CHECK_AND_INJECT':
+        checkPageWithRetry(1, 0, false).then(ok => sendResponse({ ok }));
+        return true; // async return
 
       case 'GENERATE_VIA_API':
         // Forward to active suno tab

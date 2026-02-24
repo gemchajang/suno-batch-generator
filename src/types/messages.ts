@@ -1,5 +1,5 @@
-import type { Job, JobStatus, QueueState, SongInput } from './job';
-export type { SongInput } from './job';
+import type { Job, JobStatus, QueueState, SongInput, LibrarySong } from './job';
+export type { SongInput, LibrarySong } from './job';
 
 // Side Panel → Background
 export interface StartQueueMessage {
@@ -44,16 +44,28 @@ export interface LogEntry {
 }
 
 // Background → Content Script
-export interface ExecuteJobMessage {
-  type: 'EXECUTE_JOB';
+export interface TriggerJobMessage {
+  type: 'TRIGGER_JOB';
   payload: {
     job: Job;
     settings: Settings;
   };
 }
 
+export interface MonitorJobMessage {
+  type: 'MONITOR_JOB';
+  payload: {
+    job: Job;
+    settings: Settings;
+    songIds: string[];
+  };
+}
+
 export interface AbortJobMessage {
   type: 'ABORT_JOB';
+  payload?: {
+    jobId: string;
+  };
 }
 
 export interface CheckPageMessage {
@@ -67,6 +79,7 @@ export interface JobProgressMessage {
     jobId: string;
     status: JobStatus;
     error?: string;
+    songIds?: string[];
   };
 }
 
@@ -101,6 +114,34 @@ export interface Settings {
   downloadFormat: 'mp3' | 'wav';
 }
 
+export interface ManualRunJobMessage {
+  type: 'MANUAL_RUN_JOB';
+  payload: {
+    jobId: string;
+  };
+}
+
+export interface ManualDownloadJobMessage {
+  type: 'MANUAL_DOWNLOAD_JOB';
+  payload: {
+    jobId: string;
+    title?: string;
+  };
+}
+
+export interface FetchLibraryMessage {
+  type: 'FETCH_LIBRARY';
+}
+
+export interface AddLibrarySongsMessage {
+  type: 'ADD_LIBRARY_SONGS';
+  payload: LibrarySong[];
+}
+
+export interface CheckAndInjectMessage {
+  type: 'CHECK_AND_INJECT';
+}
+
 export type PanelToBgMessage =
   | StartQueueMessage
   | StopQueueMessage
@@ -109,6 +150,11 @@ export type PanelToBgMessage =
   | GetStateMessage
   | GetStateMessage
   | UpdateSettingsMessage
+  | ManualRunJobMessage
+  | ManualDownloadJobMessage
+  | FetchLibraryMessage
+  | CheckAndInjectMessage
+  | AddLibrarySongsMessage
   | { type: 'TEST_DOWNLOAD' }
   | GenerateViaApiMessage;
 
@@ -117,9 +163,11 @@ export type BgToPanelMessage =
   | LogEntry;
 
 export type BgToContentMessage =
-  | ExecuteJobMessage
+  | TriggerJobMessage
+  | MonitorJobMessage
   | AbortJobMessage
   | CheckPageMessage
+  | FetchLibraryMessage
   | { type: 'TEST_DOWNLOAD' };
 
 // Content Script → Background (page context execution via chrome.scripting MAIN world)

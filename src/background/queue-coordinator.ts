@@ -1,4 +1,4 @@
-import type { Job, QueueState } from '../types/job';
+import type { Job, QueueState, LibrarySong } from '../types/job';
 import type { SongInput, Settings, LogEntry, QueueStateUpdate, JobProgressMessage } from '../types/messages';
 import {
   DEFAULT_DELAY_BETWEEN_SONGS,
@@ -12,7 +12,8 @@ import {
 let state: QueueState = {
   jobs: [],
   running: false,
-  currentJobId: null,
+  activeJobIds: [],
+  library: [],
 };
 
 let settings: Settings = {
@@ -53,11 +54,26 @@ export function addJobs(inputs: SongInput[]): void {
 }
 
 export function clearQueue(): void {
-  state = { jobs: [], running: false, currentJobId: null };
+  state = { jobs: [], running: false, activeJobIds: [], library: state.library };
   loopActive = false;
   broadcastState();
   persistState();
   emitLog('info', 'Queue cleared');
+}
+
+export function addLibrarySongs(songs: LibrarySong[]): void {
+  const existingIdSet = new Set(state.library.map(s => s.id));
+  const newSongs = songs.filter(s => !existingIdSet.has(s.id));
+
+  if (newSongs.length > 0) {
+    state = {
+      ...state,
+      library: [...state.library, ...newSongs]
+    };
+    broadcastState();
+    persistState();
+    emitLog('info', `Added ${newSongs.length} song(s) to Library`);
+  }
 }
 
 export function updateSettings(partial: Partial<Settings>): void {
@@ -80,37 +96,50 @@ export async function startQueue(): Promise<void> {
 
 export function stopQueue(): void {
   loopActive = false;
-  state = { ...state, running: false, currentJobId: null };
+  state = { ...state, running: false, activeJobIds: [] };
   broadcastState();
   persistState();
   emitLog('info', 'Queue stopped');
 
-  // Abort current job in content script
-  sendToContentScript({ type: 'ABORT_JOB' });
+  // Abort only the active jobs in the main queue
+  state.activeJobIds.forEach(id => {
+    sendToContentScript({ type: 'ABORT_JOB', payload: { jobId: id } });
+  });
 }
 
 async function runLoop(): Promise<void> {
   while (loopActive) {
-    const nextJob = state.jobs.find((j) => j.status === 'pending');
-    if (!nextJob) {
-      emitLog('info', 'All jobs processed. Queue finished.');
-      loopActive = false;
-      state = { ...state, running: false, currentJobId: null };
-      broadcastState();
-      persistState();
-      return;
+    // Pick up to 3 pending jobs
+    const pendingJobs = state.jobs.filter((j) => j.status === 'pending');
+    if (pendingJobs.length === 0) {
+      // Check if there are any still running
+      const stillRunning = state.jobs.some((j) => ['filling', 'creating', 'waiting', 'downloading'].includes(j.status));
+      if (!stillRunning) {
+        emitLog('info', 'All jobs processed. Queue finished.');
+        loopActive = false;
+        state = { ...state, running: false, activeJobIds: [] };
+        broadcastState();
+        persistState();
+        return;
+      } else {
+        // Wait a bit before checking again, some manual jobs might be running
+        await delay(2000);
+        continue;
+      }
     }
 
-    state = { ...state, currentJobId: nextJob.id };
+    const batch = pendingJobs.slice(0, 3);
+    const batchIds = batch.map(j => j.id);
+    state = { ...state, activeJobIds: batchIds };
     broadcastState();
-    emitLog('info', `Processing: ${nextJob.input.title}`);
+    emitLog('info', `Starting batch of ${batch.length} jobs: ${batch.map(j => j.input.title).join(', ')}`);
 
-    // Check if content script is on the right page (retry up to 5 times with 3s intervals)
+    // Check if content script is on the right page
     const pageOk = await checkPageWithRetry(5, 3000);
     if (!pageOk) {
       emitLog('error', 'Not on suno.com/create page. Queue paused — navigate to suno.com/create and press Start again.');
       loopActive = false;
-      state = { ...state, running: false, currentJobId: null };
+      state = { ...state, running: false, activeJobIds: [] };
       broadcastState();
       persistState();
       return;
@@ -118,35 +147,70 @@ async function runLoop(): Promise<void> {
 
     if (!loopActive) break;
 
-    updateJob(nextJob.id, { status: 'filling' });
+    // Phase 1: Sequential Trigger (filling & creating)
+    const monitorPromises: Promise<boolean>[] = [];
 
-    // Send job to content script
-    const success = await executeJobViaContentScript(nextJob);
+    for (const job of batch) {
+      if (!loopActive) break;
 
-    // Re-read retryCount from state since updateJob may have changed it
-    const currentJob = state.jobs.find((j) => j.id === nextJob.id);
-    const retryCount = currentJob?.retryCount ?? 0;
+      updateJob(job.id, { status: 'filling' });
+      emitLog('info', `[1/3] Triggering: ${job.input.title}`);
 
-    if (!success && retryCount < settings.maxRetries) {
-      emitLog('warn', `Retrying "${nextJob.input.title}" (attempt ${retryCount + 2}/${settings.maxRetries + 1})`);
-      updateJob(nextJob.id, { status: 'pending', retryCount: retryCount + 1 });
+      const triggerResult = await triggerJobViaContentScript(job);
+
+      // Re-read job from state
+      const currentJob = state.jobs.find((j) => j.id === job.id);
+
+      if (!triggerResult.success) {
+        const retryCount = currentJob?.retryCount ?? 0;
+        if (retryCount < settings.maxRetries) {
+          emitLog('warn', `Trigger Failed. Retrying "${job.input.title}" later (attempt ${retryCount + 2}/${settings.maxRetries + 1})`);
+          updateJob(job.id, { status: 'pending', retryCount: retryCount + 1 });
+        } else {
+          emitLog('error', `Trigger Failed permanently for "${job.input.title}"`);
+          updateJob(job.id, { status: 'failed', error: triggerResult.error });
+        }
+        continue; // Skip monitoring for this job
+      }
+
+      // If trigger was successful, queue it for parallel monitoring
+      if (triggerResult.songIds && triggerResult.songIds.length > 0) {
+        updateJob(job.id, { songIds: triggerResult.songIds });
+        const libraryEntries: LibrarySong[] = triggerResult.songIds.map(id => ({
+          id,
+          title: job.input.title
+        }));
+        addLibrarySongs(libraryEntries);
+        // We do *not* await this immediately — we fire and collect the promise
+        const p = monitorJobViaContentScript(currentJob!, triggerResult.songIds);
+        monitorPromises.push(p);
+      }
+
+      // Small delay between inputs to avoid overwhelming the UI
       await delay(2000);
-      continue;
     }
 
     if (!loopActive) break;
 
-    // Delay between songs
+    // Phase 2: Parallel Monitor (waiting & downloading)
+    if (monitorPromises.length > 0) {
+      emitLog('info', `[2/3] Waiting for generation & download in parallel (${monitorPromises.length} jobs)...`);
+      await Promise.all(monitorPromises);
+    }
+
+    if (!loopActive) break;
+
+    // Delay between cycles
     if (loopActive) {
-      emitLog('info', `Waiting ${settings.delayBetweenSongs / 1000}s before next song...`);
+      emitLog('info', `Batch finished. Waiting ${settings.delayBetweenSongs / 1000}s before next batch...`);
       await delay(settings.delayBetweenSongs);
     }
   }
 }
 
-async function checkPageWithRetry(maxAttempts: number, intervalMs: number): Promise<boolean> {
+export async function checkPageWithRetry(maxAttempts: number, intervalMs: number, requireLoopActive: boolean = true): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
-    if (!loopActive) return false;
+    if (requireLoopActive && !loopActive) return false;
 
     // Step 1: Find a suno.com/create tab by inspecting tab URLs directly
     const tab = await findSunoCreateTab();
@@ -181,38 +245,64 @@ async function checkPageWithRetry(maxAttempts: number, intervalMs: number): Prom
   return false;
 }
 
-async function executeJobViaContentScript(job: Job): Promise<boolean> {
+async function triggerJobViaContentScript(job: Job): Promise<{ success: boolean; songIds?: string[]; error?: string }> {
+  return new Promise((resolve) => {
+    // Listen for progress updates specifically from this trigger call
+    const listener = (message: JobProgressMessage) => {
+      if (message.type !== 'JOB_PROGRESS' || message.payload.jobId !== job.id) return;
+
+      const { status, error, songIds } = message.payload;
+      updateJob(job.id, { status, error });
+
+      if (status === 'waiting') {
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve({ success: true, songIds });
+      } else if (status === 'failed') {
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve({ success: false, error });
+      }
+    };
+
+    chrome.runtime.onMessage.addListener(listener);
+
+    // Send TRIGGER command
+    sendToContentScript({
+      type: 'TRIGGER_JOB',
+      payload: { job, settings },
+    });
+  });
+}
+
+async function monitorJobViaContentScript(job: Job, songIds: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       resolve(false);
-    }, settings.generationTimeout + 30_000); // extra buffer on top of generation timeout
+    }, settings.generationTimeout + 120_000); // Wait max timeout + 2 mins buffer
 
-    // Create a one-time listener for progress updates
     const listener = (message: JobProgressMessage) => {
       if (message.type !== 'JOB_PROGRESS' || message.payload.jobId !== job.id) return;
 
       const { status, error } = message.payload;
+      // We don't overwrite manual statuses if it failed already elsewhere
       updateJob(job.id, { status, error });
 
       if (status === 'completed') {
         clearTimeout(timeout);
         chrome.runtime.onMessage.removeListener(listener);
-        emitLog('info', `Completed: ${job.input.title}`);
         resolve(true);
       } else if (status === 'failed') {
         clearTimeout(timeout);
         chrome.runtime.onMessage.removeListener(listener);
-        emitLog('error', `Failed: ${job.input.title} - ${error}`);
         resolve(false);
       }
     };
 
     chrome.runtime.onMessage.addListener(listener);
 
-    // Send execute command to content script
+    // Send MONITOR command
     sendToContentScript({
-      type: 'EXECUTE_JOB',
-      payload: { job, settings },
+      type: 'MONITOR_JOB',
+      payload: { job, settings, songIds },
     });
   });
 }
@@ -281,7 +371,7 @@ async function injectContentScript(tabId: number): Promise<boolean> {
 
 // ---- Helpers ----
 
-function updateJob(id: string, updates: Partial<Job>): void {
+export function updateJob(id: string, updates: Partial<Job>): void {
   state = {
     ...state,
     jobs: state.jobs.map((j) =>
@@ -290,6 +380,94 @@ function updateJob(id: string, updates: Partial<Job>): void {
   };
   broadcastState();
   persistState();
+}
+
+export async function manualRunJob(jobId: string): Promise<void> {
+  const job = state.jobs.find(j => j.id === jobId);
+  if (!job) return;
+
+  emitLog('info', `[Manual Run] Requested for: ${job.input.title}`);
+
+  if (state.running) {
+    emitLog('warn', `[Manual Run] Cannot run manually while main queue is running. Stop the queue first.`);
+    return;
+  }
+
+  // Set the target job to pending and clear others if needed, or simply trigger it directly.
+  // Actually, simplest is to let the background route it to content script directly, but we need state tracking.
+  updateJob(job.id, { status: 'filling', retryCount: 0 });
+
+  const pageOk = await checkPageWithRetry(3, 2000, false);
+  if (!pageOk) {
+    emitLog('error', '[Manual Run] Not on suno.com/create page');
+    updateJob(job.id, { status: 'failed', error: 'Not on create page' });
+    return;
+  }
+
+  emitLog('info', `[Manual Run] Triggering UI for: ${job.input.title}`);
+  const triggerResult = await triggerJobViaContentScript(job);
+
+  const currentJob = state.jobs.find((j) => j.id === job.id);
+
+  if (!triggerResult.success) {
+    emitLog('error', `[Manual Run] Trigger Failed for "${job.input.title}"`);
+    updateJob(job.id, { status: 'failed', error: triggerResult.error });
+    return;
+  }
+
+  if (triggerResult.songIds && triggerResult.songIds.length > 0) {
+    updateJob(job.id, { songIds: triggerResult.songIds, status: 'completed' });
+    emitLog('info', `[Manual Run] Generation triggered. Added to Library.`);
+
+    // Add to library
+    const libraryEntries: LibrarySong[] = triggerResult.songIds.map(id => ({
+      id,
+      title: job.input.title
+    }));
+    addLibrarySongs(libraryEntries);
+  }
+}
+
+export async function manualDownloadJob(jobId: string, title?: string): Promise<void> {
+  let job = state.jobs.find(j => j.id === jobId);
+
+  // If job doesn't exist (e.g., fetched from Library tab), create a temporary dummy job
+  if (!job) {
+    emitLog('info', `[Manual Download] Job ${jobId} not in local queue. Constructing temporary job for download.`);
+    // Construct a minimal Job object that satisfies the type
+    job = {
+      id: jobId,
+      input: { title: title || `Library Song ${jobId.substring(0, 5)}`, lyrics: '', style: '' },
+      status: 'pending',
+      songIds: [jobId],
+      retryCount: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    } as Job;
+  }
+
+  // Double check (for TS type narrowing)
+  if (!job) return;
+
+  if (!job.songIds || job.songIds.length === 0) {
+    emitLog('error', `[Manual Download] No song IDs found for "${job.input.title}". Please run it first to generate IDs.`);
+    return;
+  }
+
+  emitLog('info', `[Manual Download] Triggered for: ${job.input.title}`);
+
+  const pageOk = await checkPageWithRetry(3, 2000, false);
+  if (!pageOk) {
+    emitLog('error', '[Manual Download] Not on suno.com/create page');
+    return;
+  }
+
+  emitLog('info', `[Manual Download] Checking status and downloading ${job.songIds.length} song(s)...`);
+  // Use the reliable monitor script. It checks API status, which will be "complete", and triggers the API download.
+  const tempId = job.id;
+  state = { ...state, activeJobIds: [...state.activeJobIds, tempId] };
+  await monitorJobViaContentScript(job, job.songIds);
+  state = { ...state, activeJobIds: state.activeJobIds.filter(id => id !== tempId) };
 }
 
 function broadcastState(): void {
@@ -341,7 +519,7 @@ export async function restoreState(): Promise<void> {
     const restored = data[STORAGE_KEY_QUEUE] as QueueState;
     // Reset running state on restore (service worker restarted)
     restored.running = false;
-    restored.currentJobId = null;
+    restored.activeJobIds = [];
     // Reset any in-progress jobs back to pending
     restored.jobs = restored.jobs.map((j) => {
       if (['filling', 'creating', 'waiting', 'downloading'].includes(j.status)) {
@@ -349,6 +527,7 @@ export async function restoreState(): Promise<void> {
       }
       return j;
     });
+    if (!restored.library) restored.library = [];
     state = restored;
   }
 

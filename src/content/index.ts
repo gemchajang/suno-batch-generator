@@ -1,5 +1,5 @@
-import type { BgToContentMessage, JobProgressMessage } from '../types/messages';
-import { executeJob, abortCurrentJob, testDownloadLastGeneratedSong } from './suno-automation';
+import type { BgToContentMessage, JobProgressMessage, LibrarySong } from '../types/messages';
+import { triggerJob, monitorJob, abortJob, testDownloadLastGeneratedSong, fetchLibrarySongs } from './suno-automation';
 
 console.log('[Suno Batch Generator] Content script loaded on', window.location.href);
 
@@ -27,13 +27,20 @@ setInterval(() => {
 chrome.runtime.onMessage.addListener(
   (message: any, _sender, sendResponse) => {
     switch (message.type) {
-      case 'EXECUTE_JOB':
-        handleExecuteJob(message as Extract<BgToContentMessage, { type: 'EXECUTE_JOB' }>);
+      case 'TRIGGER_JOB':
+        handleTriggerJob(message as Extract<BgToContentMessage, { type: 'TRIGGER_JOB' }>);
+        sendResponse({ ack: true });
+        break;
+
+      case 'MONITOR_JOB':
+        handleMonitorJob(message as Extract<BgToContentMessage, { type: 'MONITOR_JOB' }>);
         sendResponse({ ack: true });
         break;
 
       case 'ABORT_JOB':
-        abortCurrentJob();
+        if (message.payload?.jobId) {
+          abortJob(message.payload.jobId);
+        }
         sendResponse({ ack: true });
         break;
 
@@ -60,6 +67,12 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ ack: true });
         break;
 
+      case 'FETCH_LIBRARY':
+        fetchLibrarySongs()
+          .then((songs: LibrarySong[]) => sendResponse({ ok: true, songs }))
+          .catch((e: Error) => sendResponse({ ok: false, error: e.message }));
+        return true; // Keep channel open for async response
+
       case 'GENERATE_VIA_API':
         console.log('[SBG] GENERATE_VIA_API requested', message.payload);
         import('./suno-automation').then(mod => {
@@ -76,31 +89,46 @@ chrome.runtime.onMessage.addListener(
   },
 );
 
-async function handleExecuteJob(message: Extract<BgToContentMessage, { type: 'EXECUTE_JOB' }>) {
+async function handleTriggerJob(message: Extract<BgToContentMessage, { type: 'TRIGGER_JOB' }>) {
   const { job, settings } = message.payload;
 
   try {
-    await executeJob(job, settings, (status, error) => {
-      const progress: JobProgressMessage = {
+    const songIds = await triggerJob(job, settings, (status, error) => {
+      chrome.runtime.sendMessage({
         type: 'JOB_PROGRESS',
-        payload: {
-          jobId: job.id,
-          status: status as JobProgressMessage['payload']['status'],
-          error,
-        },
-      };
-      chrome.runtime.sendMessage(progress);
+        payload: { jobId: job.id, status, error },
+      } as JobProgressMessage);
+    });
+
+    // Send the generated songIds back so background tracking knows them
+    chrome.runtime.sendMessage({
+      type: 'JOB_PROGRESS',
+      payload: { jobId: job.id, status: 'waiting', error: undefined, songIds }, // We pass songIds indirectly via a newly recognized structure, or just handle it. We need to add songIds to JobProgressMessage. Wait, let's just trigger another message or piggyback.
+    });
+
+  } catch (err) {
+    chrome.runtime.sendMessage({
+      type: 'JOB_PROGRESS',
+      payload: { jobId: job.id, status: 'failed', error: (err as Error).message },
+    } as JobProgressMessage);
+  }
+}
+
+async function handleMonitorJob(message: Extract<BgToContentMessage, { type: 'MONITOR_JOB' }>) {
+  const { job, settings, songIds } = message.payload;
+
+  try {
+    await monitorJob(job, settings, songIds, (status, error) => {
+      chrome.runtime.sendMessage({
+        type: 'JOB_PROGRESS',
+        payload: { jobId: job.id, status, error },
+      } as JobProgressMessage);
     });
   } catch (err) {
-    const progress: JobProgressMessage = {
+    chrome.runtime.sendMessage({
       type: 'JOB_PROGRESS',
-      payload: {
-        jobId: job.id,
-        status: 'failed',
-        error: (err as Error).message,
-      },
-    };
-    chrome.runtime.sendMessage(progress);
+      payload: { jobId: job.id, status: 'failed', error: (err as Error).message },
+    } as JobProgressMessage);
   }
 }
 
