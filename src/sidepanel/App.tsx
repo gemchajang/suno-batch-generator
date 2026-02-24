@@ -77,7 +77,19 @@ export default function App() {
           {/* Existing Queue UI Content */}
           <h1 className="text-base font-bold text-gray-100 hidden">Suno Batch Generator</h1>
 
-          <FileUploader onSongsLoaded={addJobs} disabled={running} />
+          <div className="flex flex-col gap-2">
+            <FileUploader onSongsLoaded={addJobs} disabled={running} />
+            <button
+              onClick={() => {
+                addLog('info', 'Fetching jobs from Notion...');
+                chrome.runtime.sendMessage({ type: 'FETCH_NOTION_JOBS' });
+              }}
+              disabled={running}
+              className="w-full px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 text-white rounded text-sm font-medium transition-colors shadow-sm flex items-center justify-center gap-2"
+            >
+              <span>📋</span> Fetch from Notion
+            </button>
+          </div>
 
           <ControlBar
             running={running}

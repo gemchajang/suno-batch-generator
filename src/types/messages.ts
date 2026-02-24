@@ -112,6 +112,8 @@ export interface Settings {
   maxRetries: number;
   downloadPath: string;
   downloadFormat: 'mp3' | 'wav';
+  notionApiKey?: string;
+  notionDatabaseId?: string;
 }
 
 export interface ManualRunJobMessage {
@@ -142,6 +144,10 @@ export interface CheckAndInjectMessage {
   type: 'CHECK_AND_INJECT';
 }
 
+export interface FetchNotionJobsMessage {
+  type: 'FETCH_NOTION_JOBS';
+}
+
 export type PanelToBgMessage =
   | StartQueueMessage
   | StopQueueMessage
@@ -155,6 +161,7 @@ export type PanelToBgMessage =
   | FetchLibraryMessage
   | CheckAndInjectMessage
   | AddLibrarySongsMessage
+  | FetchNotionJobsMessage
   | { type: 'TEST_DOWNLOAD' }
   | GenerateViaApiMessage;
 

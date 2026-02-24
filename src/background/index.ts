@@ -11,7 +11,8 @@ import {
   manualRunJob,
   manualDownloadJob,
   checkPageWithRetry,
-  addLibrarySongs
+  addLibrarySongs,
+  fetchNotionJobs
 } from './queue-coordinator';
 import { initDownloadManager } from './download-manager';
 
@@ -105,6 +106,12 @@ chrome.runtime.onMessage.addListener(
         addLibrarySongs(message.payload);
         sendResponse({ ok: true });
         break;
+
+      case 'FETCH_NOTION_JOBS':
+        fetchNotionJobs()
+          .then(jobs => sendResponse({ ok: true, count: jobs?.length || 0 }))
+          .catch(e => sendResponse({ ok: false, error: e.message }));
+        return true;
 
       case 'CHECK_AND_INJECT':
         checkPageWithRetry(1, 0, false).then(ok => sendResponse({ ok }));

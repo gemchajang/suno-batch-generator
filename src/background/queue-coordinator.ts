@@ -8,6 +8,7 @@ import {
   STORAGE_KEY_SETTINGS,
   DEFAULT_DOWNLOAD_FORMAT,
 } from '../config/constants';
+import { fetchPendingNotionJobs, updateNotionJobStatus } from './notion-api';
 
 let state: QueueState = {
   jobs: [],
@@ -79,6 +80,24 @@ export function addLibrarySongs(songs: LibrarySong[]): void {
 export function updateSettings(partial: Partial<Settings>): void {
   settings = { ...settings, ...partial };
   chrome.storage.local.set({ [STORAGE_KEY_SETTINGS]: settings });
+}
+
+export async function fetchNotionJobs(): Promise<Job[] | void> {
+  try {
+    emitLog('info', 'Connecting to Notion API...');
+    const inputs = await fetchPendingNotionJobs(settings);
+
+    if (inputs.length === 0) {
+      emitLog('info', 'No pending jobs found in Notion.');
+      return [];
+    }
+
+    addJobs(inputs);
+    return state.jobs.slice(-inputs.length); // return the newly added jobs
+  } catch (error: any) {
+    emitLog('error', `Notion fetch failed: ${error.message}`);
+    throw error;
+  }
 }
 
 // ---- Queue execution ----
@@ -372,6 +391,9 @@ async function injectContentScript(tabId: number): Promise<boolean> {
 // ---- Helpers ----
 
 export function updateJob(id: string, updates: Partial<Job>): void {
+  const jobToUpdate = state.jobs.find(j => j.id === id);
+  const oldStatus = jobToUpdate?.status;
+
   state = {
     ...state,
     jobs: state.jobs.map((j) =>
@@ -380,6 +402,16 @@ export function updateJob(id: string, updates: Partial<Job>): void {
   };
   broadcastState();
   persistState();
+
+  // If status changed to a terminal state and it's a Notion job, sync it
+  if (updates.status && updates.status !== oldStatus) {
+    const updatedJob = state.jobs.find(j => j.id === id);
+    if (updatedJob?.notionPageId && ['completed', 'failed', 'skipped'].includes(updates.status)) {
+      updateNotionJobStatus(settings, updatedJob.notionPageId, updates.status).catch(e => {
+        emitLog('error', `Failed to sync Notion status for ${updatedJob.input.title}: ${e.message}`);
+      });
+    }
+  }
 }
 
 export async function manualRunJob(jobId: string): Promise<void> {

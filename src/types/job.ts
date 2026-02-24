@@ -4,6 +4,7 @@ export interface SongInput {
   lyrics: string;
   instrumental?: boolean;
   downloadFolder?: string;
+  notionPageId?: string;
 }
 
 export type JobStatus =
@@ -25,6 +26,7 @@ export interface Job {
   retryCount: number;
   createdAt: number;
   updatedAt: number;
+  notionPageId?: string;
 }
 
 export interface LibrarySong {

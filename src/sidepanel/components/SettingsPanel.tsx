@@ -70,6 +70,27 @@ export default function SettingsPanel({ settings, onUpdate, disabled }: Props) {
               </button>
             </div>
           </div>
+          <div className="pt-2 border-t border-gray-700/50 space-y-3">
+            <div className="text-xs font-medium text-gray-300">Notion Integration</div>
+            <TextSettingRow
+              label="API Token"
+              value={settings.notionApiKey || ''}
+              onChange={(v) => onUpdate({ notionApiKey: v })}
+              disabled={disabled}
+              placeholder="secret_..."
+              type="password"
+            />
+            <TextSettingRow
+              label="Database ID"
+              value={settings.notionDatabaseId || ''}
+              onChange={(v) => onUpdate({ notionDatabaseId: v })}
+              disabled={disabled}
+              placeholder="e.g. 1a2b3c..."
+            />
+            <div className="text-[10px] text-gray-500 leading-tight">
+              Create a Notion Integration, share your database with it, and ensure your DB has 'Title', 'Lyrics', 'Style', and 'Status' text/select columns.
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -102,6 +123,36 @@ function SettingRow({
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}
         className="w-20 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-xs text-gray-200 disabled:opacity-50"
+      />
+    </div>
+  );
+}
+
+function TextSettingRow({
+  label,
+  value,
+  onChange,
+  disabled,
+  placeholder,
+  type = "text"
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <label className="text-xs text-gray-400 flex-none w-24">{label}</label>
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="flex-1 min-w-0 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-xs text-gray-200 disabled:opacity-50"
       />
     </div>
   );

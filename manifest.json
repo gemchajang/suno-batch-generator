@@ -16,7 +16,8 @@
     "https://suno.com/*",
     "https://www.suno.com/*",
     "https://studio-api.prod.suno.com/*",
-    "https://cdn1.suno.ai/*"
+    "https://cdn1.suno.ai/*",
+    "https://api.notion.com/*"
   ],
   "side_panel": {
     "default_path": "side_panel.html"
