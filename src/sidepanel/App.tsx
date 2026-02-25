@@ -77,8 +77,16 @@ export default function App() {
           {/* Existing Queue UI Content */}
           <h1 className="text-base font-bold text-gray-100 hidden">Suno Batch Generator</h1>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3 bg-gray-800/50 p-3 rounded-lg border border-gray-700/50">
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Add Jobs</div>
             <FileUploader onSongsLoaded={addJobs} disabled={running} />
+
+            <div className="relative flex items-center py-1">
+              <div className="flex-grow border-t border-gray-700"></div>
+              <span className="flex-shrink-0 mx-2 text-xs text-gray-500">OR</span>
+              <div className="flex-grow border-t border-gray-700"></div>
+            </div>
+
             <button
               onClick={() => {
                 addLog('info', 'Fetching jobs from Notion...');
